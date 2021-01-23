@@ -2,6 +2,9 @@ import numpy as np
 from random import choice, randint
 from typing import List, Optional, NamedTuple
 
+from config import MuZeroConfig
+from games.cartpole import Game
+from training.networks import Network
 
 MAXIMUM_FLOAT_VALUE = float('inf')
 

@@ -1,5 +1,7 @@
 import gym
 
+from core.core import Action, Player, Node, ActionHistory
+
 
 class Game(object):
     def __init__(self, seed=None, discount: float = 0.95):
