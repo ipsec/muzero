@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import tensorflow as tf
-from tensorflow.keras.losses import binary_crossentropy
+from tqdm import trange
 
 # MuZero training is split into two independent parts: Network training and
 # self-play data generation.
@@ -32,10 +32,14 @@ from utils import MinMaxStats
 # writing it to a shared replay buffer.
 def run_selfplay(config: MuZeroConfig, storage: SharedStorage, replay_buffer: ReplayBuffer):
     # while True:
-    for _ in range(config.num_episodes):
-        network = storage.latest_network()
-        game = play_game(config, network)
-        replay_buffer.save_game(game)
+    with trange(config.num_episodes) as t:
+        for i in t:
+            network = storage.latest_network()
+            game = play_game(config, network)
+            replay_buffer.save_game(game)
+            t.set_description(f"Episode: {i}")
+            t.update(1)
+            t.refresh()
 
 
 # Each game is produced by starting at the initial board position, then
@@ -165,6 +169,7 @@ def muzero(config: MuZeroConfig):
     replay_buffer = ReplayBuffer(config)
 
     for _ in range(config.num_actors):
+        print(f"Running actor: {_ + 1}")
         launch_job(run_selfplay, config, storage, replay_buffer)
 
     train_network(config, storage, replay_buffer)
@@ -172,13 +177,17 @@ def muzero(config: MuZeroConfig):
     return storage.latest_network()
 
 
-if __name__ == "__main__":
-    config = make_atari_config()
-    network = muzero(config)
+def save_models(network: Network):
     try:
         for model in network.get_networks():
             Path.mkdir(Path(f'./checkpoints/{model.__class__.__name__}'), parents=True, exist_ok=True)
             model.save_weights(f'./checkpoints/{model.__class__.__name__}/checkpoint')
             print(f"Model {model.__class__.__name__} Saved!")
     except Exception as e:
-        print("Unable to save networks.")
+        print(f"Unable to save networks. {e}")
+
+
+if __name__ == "__main__":
+    config = make_atari_config()
+    network = muzero(config)
+    save_models(network)
