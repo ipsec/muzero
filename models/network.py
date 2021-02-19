@@ -1,5 +1,5 @@
 from abc import ABC
-from typing import Tuple
+from typing import Tuple, Callable, List
 
 import tensorflow as tf
 from tensorflow.keras.layers import Dense
@@ -150,9 +150,22 @@ class Network(object):
             hidden_state=s_k
         )
 
-    def get_weights(self):
-        # Returns the weights of this network.
-        return [x.trainable_weights for x in [self.g_dynamics, self.f_prediction, self.h_representation]]
+    def get_weights(self) -> List:
+        networks = [self.g_dynamics, self.f_prediction, self.h_representation]
+        return [variables
+                for variables_list in map(lambda n: n.weights, networks)
+                for variables in variables_list]
+
+    def cb_get_variables(self) -> Callable:
+        """Return a callback that return the trainable variables of the network."""
+
+        def get_variables():
+            networks = [self.g_dynamics, self.f_prediction, self.h_representation]
+            return [variables
+                    for variables_list in map(lambda n: n.weights, networks)
+                    for variables in variables_list]
+
+        return get_variables
 
     def training_steps(self) -> int:
         # How many steps / batches the network has been trained for.

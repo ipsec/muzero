@@ -90,41 +90,45 @@ def scale_gradient(tensor: Any, scale):
 
 
 def update_weights(optimizer: tf.keras.optimizers.Optimizer, network: Network, batch, weight_decay: float):
-    loss = 0
-    for image, actions, targets in batch:
-        # Initial step, from the real observation.
-        network_output = network.initial_inference(image)
-        hidden_state = network_output.hidden_state
-        predictions = [(1.0, network_output)]
-
-        # Recurrent steps, from action and previous hidden state.
-        for action in actions:
-            network_output = network.recurrent_inference(hidden_state, action)
+    def loss():
+        loss = 0
+        for image, actions, targets in batch:
+            # Initial step, from the real observation.
+            network_output = network.initial_inference(image)
             hidden_state = network_output.hidden_state
-            predictions.append((1.0 / len(actions), network_output))
+            predictions = [(1.0, network_output)]
 
-            hidden_state = scale_gradient(hidden_state, 0.5)
+            # Recurrent steps, from action and previous hidden state.
+            for action in actions:
+                network_output = network.recurrent_inference(hidden_state, action)
+                hidden_state = network_output.hidden_state
+                predictions.append((1.0 / len(actions), network_output))
 
-        for k, (prediction, target) in enumerate(zip(predictions, targets)):
-            gradient_scale, network_output = prediction
-            target_value, target_reward, target_policy = target
+                hidden_state = scale_gradient(hidden_state, 0.5)
 
-            # TODO: Freeze here, because target_policy return a empty list (terminal states?)
+            for k, (prediction, target) in enumerate(zip(predictions, targets)):
+                gradient_scale, network_output = prediction
+                target_value, target_reward, target_policy = target
 
-            l = tf.nn.softmax_cross_entropy_with_logits(
-                logits=tf.stack(list(network_output.policy_logits.values())),
-                labels=tf.convert_to_tensor(target_policy))
-            l += scalar_loss(network_output.value, target_value)
-            if k > 0:
-                l += scalar_loss(network_output.reward, tf.constant(target_reward, shape=(1, 1)))
+                # TODO: Freeze here, because target_policy return a empty list (terminal states?)
+                if target_policy:
 
-            loss += scale_gradient(l, gradient_scale)
-    loss /= len(batch)
+                    l = tf.nn.softmax_cross_entropy_with_logits(
+                        logits=tf.stack(list(network_output.policy_logits.values())),
+                        labels=tf.convert_to_tensor(target_policy))
+                    l += scalar_loss(tf.constant(network_output.value, shape=(1, 1)), target_value)
+                    if k > 0:
+                        l += scalar_loss(tf.constant(network_output.reward, shape=(1, 1)), tf.constant(target_reward, shape=(1, 1)))
 
-    for weights in network.get_weights():
-        loss += weight_decay * tf.nn.l2_loss(weights)
+                    loss += scale_gradient(l, gradient_scale)
+        loss /= len(batch)
 
-    optimizer.minimize(loss, var_list=network.get_variables())
+        for weights in network.get_weights():
+            loss += weight_decay * tf.nn.l2_loss(weights)
+
+        return loss
+
+    optimizer.minimize(loss, var_list=network.cb_get_variables())
     network.increment_training_steps()
 
 

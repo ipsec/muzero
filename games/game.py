@@ -180,10 +180,10 @@ def make_atari_config() -> MuZeroConfig:
         discount=0.997,
         dirichlet_alpha=0.25,
         num_simulations=15,
-        batch_size=32,
+        batch_size=2,
         td_steps=10,
         num_actors=1,
-        num_episodes=100,
+        num_episodes=4,
         lr_init=0.05,
         lr_decay_steps=350e3,
         visit_softmax_temperature_fn=visit_softmax_temperature)
