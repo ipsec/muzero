@@ -3,10 +3,11 @@
 # pylint: disable=unused-argument
 # pylint: disable=missing-docstring
 # pylint: disable=g-explicit-length-test
+from pathlib import Path
 from typing import Any
 
 import tensorflow as tf
-from tensorflow.keras.losses import CategoricalCrossentropy
+from tensorflow.keras.losses import binary_crossentropy
 
 # MuZero training is split into two independent parts: Network training and
 # self-play data generation.
@@ -18,6 +19,7 @@ from games.game import ReplayBuffer, Game, make_atari_config
 from mcts import Node, expand_node, backpropagate, add_exploration_noise, run_mcts, select_action
 from models.network import Network
 from storage import SharedStorage
+from summary import write_summary
 from utils import MinMaxStats
 
 
@@ -29,7 +31,7 @@ from utils import MinMaxStats
 # snapshot, produces a game and makes it available to the training job by
 # writing it to a shared replay buffer.
 def run_selfplay(config: MuZeroConfig, storage: SharedStorage, replay_buffer: ReplayBuffer):
-    #while True:
+    # while True:
     for _ in range(config.num_episodes):
         network = storage.latest_network()
         game = play_game(config, network)
@@ -92,9 +94,9 @@ def scale_gradient(tensor: Any, scale):
 def update_weights(optimizer: tf.keras.optimizers.Optimizer, network: Network, batch, weight_decay: float):
     def loss():
         loss = 0
-        for image, actions, targets in batch:
+        for observations, actions, targets in batch:
             # Initial step, from the real observation.
-            network_output = network.initial_inference(image)
+            network_output = network.initial_inference(observations)
             hidden_state = network_output.hidden_state
             predictions = [(1.0, network_output)]
 
@@ -118,7 +120,8 @@ def update_weights(optimizer: tf.keras.optimizers.Optimizer, network: Network, b
                         labels=tf.convert_to_tensor(target_policy))
                     l += scalar_loss(tf.constant(network_output.value, shape=(1, 1)), target_value)
                     if k > 0:
-                        l += scalar_loss(tf.constant(network_output.reward, shape=(1, 1)), tf.constant(target_reward, shape=(1, 1)))
+                        l += scalar_loss(tf.constant(network_output.reward, shape=(1, 1)),
+                                         tf.constant(target_reward, shape=(1, 1)))
 
                     loss += scale_gradient(l, gradient_scale)
         loss /= len(batch)
@@ -126,6 +129,7 @@ def update_weights(optimizer: tf.keras.optimizers.Optimizer, network: Network, b
         for weights in network.get_weights():
             loss += weight_decay * tf.nn.l2_loss(weights)
 
+        write_summary(optimizer.iterations, loss)
         return loss
 
     optimizer.minimize(loss, var_list=network.cb_get_variables())
@@ -141,7 +145,7 @@ def scalar_loss(prediction: tf.Tensor, target: tf.Tensor) -> float:
     if isinstance(target, float):
         target = tf.constant(target, shape=(1, 1))
 
-    return CategoricalCrossentropy()(target, prediction).numpy()
+    return tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=prediction, labels=target))
 
 
 ######### End Training ###########
@@ -154,6 +158,7 @@ def scalar_loss(prediction: tf.Tensor, target: tf.Tensor) -> float:
 
 def launch_job(f, *args):
     f(*args)
+
 
 def muzero(config: MuZeroConfig):
     storage = SharedStorage(config)
@@ -169,4 +174,11 @@ def muzero(config: MuZeroConfig):
 
 if __name__ == "__main__":
     config = make_atari_config()
-    muzero(config)
+    network = muzero(config)
+    try:
+        for model in network.get_networks():
+            Path.mkdir(Path(f'./checkpoints/{model.__class__.__name__}'), parents=True, exist_ok=True)
+            model.save_weights(f'./checkpoints/{model.__class__.__name__}/checkpoint')
+            print(f"Model {model.__class__.__name__} Saved!")
+    except Exception as e:
+        print("Unable to save networks.")

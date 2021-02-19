@@ -167,6 +167,9 @@ class Network(object):
 
         return get_variables
 
+    def get_networks(self) -> List:
+        return [self.g_dynamics, self.f_prediction, self.h_representation]
+
     def training_steps(self) -> int:
         # How many steps / batches the network has been trained for.
         return int(self._training_steps / self.config.batch_size)
