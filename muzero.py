@@ -7,13 +7,14 @@ from pathlib import Path
 from typing import Any
 
 import tensorflow as tf
-from tqdm import trange
 
 # MuZero training is split into two independent parts: Network training and
 # self-play data generation.
 # These two parts only communicate by transferring the latest network checkpoint
 # from the training to the self-play, and the finished games from the self-play
 # to the training.
+from tqdm import trange
+
 from config import MuZeroConfig
 from games.game import ReplayBuffer, Game, make_atari_config
 from mcts import Node, expand_node, backpropagate, add_exploration_noise, run_mcts, select_action
@@ -32,14 +33,14 @@ from utils import MinMaxStats
 # writing it to a shared replay buffer.
 def run_selfplay(config: MuZeroConfig, storage: SharedStorage, replay_buffer: ReplayBuffer):
     # while True:
-    with trange(config.num_episodes) as t:
-        for i in t:
-            network = storage.latest_network()
-            game = play_game(config, network)
-            replay_buffer.save_game(game)
-            t.set_description(f"Episode: {i}")
-            t.update(1)
-            t.refresh()
+    returns = []
+    network = storage.latest_network()
+    for _ in range(config.num_episodes):
+        game = play_game(config, network)
+        replay_buffer.save_game(game)
+        returns.append(sum(game.rewards))
+    return sum(returns) / config.num_episodes
+
 
 
 # Each game is produced by starting at the initial board position, then
@@ -77,8 +78,7 @@ def play_game(config: MuZeroConfig, network: Network) -> Game:
 ####### Part 2: Training #########
 
 
-def train_network(config: MuZeroConfig, storage: SharedStorage,
-                  replay_buffer: ReplayBuffer):
+def train_network(config: MuZeroConfig, storage: SharedStorage, replay_buffer: ReplayBuffer):
     network = Network(config)
     optimizer = tf.keras.optimizers.Adam(learning_rate=0.01)
 
@@ -96,6 +96,7 @@ def scale_gradient(tensor: Any, scale):
 
 
 def update_weights(optimizer: tf.keras.optimizers.Optimizer, network: Network, batch, weight_decay: float):
+
     def loss():
         loss = 0
         for observations, actions, targets in batch:
@@ -133,14 +134,13 @@ def update_weights(optimizer: tf.keras.optimizers.Optimizer, network: Network, b
         for weights in network.get_weights():
             loss += weight_decay * tf.nn.l2_loss(weights)
 
-        write_summary(optimizer.iterations, loss)
         return loss
 
     optimizer.minimize(loss, var_list=network.cb_get_variables())
     network.increment_training_steps()
 
 
-def scalar_loss(prediction: tf.Tensor, target: tf.Tensor) -> float:
+def scalar_loss(prediction: tf.Tensor, target: tf.Tensor) -> tf.Tensor:
     # MSE in board games, cross entropy between categorical values in Atari.
 
     if isinstance(prediction, float):
@@ -160,19 +160,20 @@ def scalar_loss(prediction: tf.Tensor, target: tf.Tensor) -> float:
 ################################################################################
 
 
-def launch_job(f, *args):
-    f(*args)
-
-
 def muzero(config: MuZeroConfig):
     storage = SharedStorage(config)
     replay_buffer = ReplayBuffer(config)
 
-    for _ in range(config.num_actors):
-        print(f"Running actor: {_ + 1}")
-        launch_job(run_selfplay, config, storage, replay_buffer)
-
-    train_network(config, storage, replay_buffer)
+    with trange(config.training_loops) as t:
+        for i in t:
+            score = run_selfplay(config, storage, replay_buffer)
+            write_summary(i, score)
+            train_network(config, storage, replay_buffer)
+            if i % 10 == 0:
+                save_models(storage.latest_network())
+            t.set_description(f"Episode: {i}/{config.training_loops} - Score: {score:.2f}")
+            t.update(1)
+            t.refresh()
 
     return storage.latest_network()
 
@@ -189,5 +190,7 @@ def save_models(network: Network):
 
 if __name__ == "__main__":
     config = make_atari_config()
-    network = muzero(config)
-    save_models(network)
+    #network = muzero(config)
+    #save_models(network)
+
+    muzero(config)

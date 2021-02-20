@@ -64,6 +64,7 @@ class Game(object):
 
     def __init__(self, action_space_size: int, discount: float):
         self.env = gym.make('LunarLander-v2')
+        #self.env = gym.make('CartPole-v1')
         self.states = [self.env.reset()]
         self.history = []
         self.rewards = []
@@ -165,10 +166,11 @@ class ReplayBuffer(object):
 
 
 def make_atari_config() -> MuZeroConfig:
-    def visit_softmax_temperature(num_moves, training_steps):
-        if training_steps < 500e3:
+
+    def visit_softmax_temperature(config: MuZeroConfig, num_moves, training_steps):
+        if training_steps < int(config.training_steps/3):
             return 1.0
-        elif training_steps < 750e3:
+        elif training_steps < int(config.training_steps/2):
             return 0.5
         else:
             return 0.25
@@ -177,13 +179,15 @@ def make_atari_config() -> MuZeroConfig:
         state_space_size=8,
         action_space_size=4,
         max_moves=1000,  # Half an hour at action repeat 4.
-        discount=0.997,
+        discount=0.95,
         dirichlet_alpha=0.25,
-        num_simulations=15,
-        batch_size=1024,
+        num_simulations=40,
+        batch_size=512,
         td_steps=10,
         num_actors=1,
-        num_episodes=10000,
+        num_episodes=1000,
+        training_loops=1000,
         lr_init=0.05,
-        lr_decay_steps=350e3,
+        training_steps=1000,
+        lr_decay_steps=250,
         visit_softmax_temperature_fn=visit_softmax_temperature)

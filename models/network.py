@@ -36,7 +36,7 @@ class Dynamics(Model, ABC):
         self.hidden = Dense(neurons, activation=tf.nn.relu)
         self.common = Dense(neurons, activation=tf.nn.relu)
         self.s_k = Dense(hidden_state_size, activation=tf.nn.relu)
-        self.r_k = Dense(1, activation=tf.nn.relu)
+        self.r_k = Dense(1)
 
     @tf.function
     def call(self, encoded_space, **kwargs) -> Tuple[tf.Tensor, tf.Tensor]:
@@ -63,8 +63,8 @@ class Prediction(Model, ABC):
         self.inputs = Dense(neurons, activation=tf.nn.relu)
         self.hidden = Dense(neurons, activation=tf.nn.relu)
         self.common = Dense(neurons, activation=tf.nn.relu)
-        self.policy = Dense(action_state_size, activation=tf.nn.relu)
-        self.value = Dense(1, activation=tf.nn.relu)
+        self.policy = Dense(action_state_size, activation=tf.nn.tanh)
+        self.value = Dense(1)
 
     @tf.function
     def call(self, hidden_state, **kwargs) -> Tuple[tf.Tensor, tf.Tensor]:
@@ -89,10 +89,10 @@ class Representation(Model, ABC):
         """
         super(Representation, self).__init__()
         neurons = 128
-        self.inputs = Dense(neurons, activation='relu')
-        self.hidden = Dense(neurons, activation='relu')
-        self.common = Dense(neurons, activation='relu')
-        self.s0 = Dense(observation_space_size, activation='relu')
+        self.inputs = Dense(neurons, activation=tf.nn.relu)
+        self.hidden = Dense(neurons, activation=tf.nn.relu)
+        self.common = Dense(neurons, activation=tf.nn.relu)
+        self.s0 = Dense(observation_space_size, activation=tf.nn.relu)
 
     @tf.function
     def call(self, observation, **kwargs) -> tf.Tensor:
