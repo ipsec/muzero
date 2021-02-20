@@ -42,7 +42,6 @@ def run_selfplay(config: MuZeroConfig, storage: SharedStorage, replay_buffer: Re
     return sum(returns) / config.num_episodes
 
 
-
 # Each game is produced by starting at the initial board position, then
 # repeatedly executing a Monte Carlo Tree Search to generate moves until the end
 # of the game is reached.
@@ -82,9 +81,9 @@ def train_network(config: MuZeroConfig, storage: SharedStorage, replay_buffer: R
     network = Network(config)
     optimizer = tf.keras.optimizers.Adam(learning_rate=0.01)
 
-    for i in range(config.training_steps):
-        if i % config.checkpoint_interval == 0:
-            storage.save_network(i, network)
+    for _ in range(config.training_steps):
+        if _ % config.checkpoint_interval == 0:
+            storage.save_network(_, network)
         batch = replay_buffer.sample_batch(config.num_unroll_steps, config.td_steps)
         update_weights(optimizer, network, batch, config.weight_decay)
     storage.save_network(config.training_steps, network)
@@ -96,7 +95,6 @@ def scale_gradient(tensor: Any, scale):
 
 
 def update_weights(optimizer: tf.keras.optimizers.Optimizer, network: Network, batch, weight_decay: float):
-
     def loss():
         loss = 0
         for observations, actions, targets in batch:
@@ -164,16 +162,17 @@ def muzero(config: MuZeroConfig):
     storage = SharedStorage(config)
     replay_buffer = ReplayBuffer(config)
 
-    with trange(config.training_loops) as t:
-        for i in t:
-            score = run_selfplay(config, storage, replay_buffer)
-            write_summary(i, score)
-            train_network(config, storage, replay_buffer)
-            if i % 10 == 0:
-                save_models(storage.latest_network())
-            t.set_description(f"Episode: {i}/{config.training_loops} - Score: {score:.2f}")
-            t.update(1)
-            t.refresh()
+    t = trange(config.training_loops, leave=True)
+    for _ in t:
+        score = run_selfplay(config, storage, replay_buffer)
+        write_summary(_, score)
+        train_network(config, storage, replay_buffer)
+        saved = ''
+        if _ % 10 == 0:
+            save_models(storage.latest_network())
+            saved = ' (Saved)'
+        t.set_description(f"Episode{saved}: {_}/{config.training_loops} - Score: {score:.2f}")
+        t.refresh()
 
     return storage.latest_network()
 
@@ -183,14 +182,14 @@ def save_models(network: Network):
         for model in network.get_networks():
             Path.mkdir(Path(f'./checkpoints/{model.__class__.__name__}'), parents=True, exist_ok=True)
             model.save_weights(f'./checkpoints/{model.__class__.__name__}/checkpoint')
-            print(f"Model {model.__class__.__name__} Saved!")
+            # print(f"Model {model.__class__.__name__} Saved!")
     except Exception as e:
         print(f"Unable to save networks. {e}")
 
 
 if __name__ == "__main__":
     config = make_atari_config()
-    #network = muzero(config)
-    #save_models(network)
+    # network = muzero(config)
+    # save_models(network)
 
     muzero(config)
