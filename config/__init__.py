@@ -15,8 +15,8 @@ class MuZeroConfig(object):
                  batch_size: int,
                  td_steps: int,
                  num_actors: int,
-                 num_episodes: int,
-                 training_loops: int,
+                 num_games: int,
+                 episodes: int,
                  lr_init: float,
                  lr_decay_steps: float,
                  visit_softmax_temperature_fn,
@@ -27,7 +27,7 @@ class MuZeroConfig(object):
         self.state_space_size = state_space_size
         self.action_space_size = action_space_size
         self.num_actors = num_actors
-        self.num_episodes = num_episodes
+        self.num_games = num_games
 
         self.visit_softmax_temperature_fn = visit_softmax_temperature_fn
         self.max_moves = max_moves
@@ -49,7 +49,7 @@ class MuZeroConfig(object):
         self.known_bounds = known_bounds
 
         # Training
-        self.training_loops = training_loops
+        self.episodes = episodes
         self.training_steps = training_steps
         self.checkpoint_interval = int(1e3)
         self.window_size = int(1e6)

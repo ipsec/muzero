@@ -39,7 +39,7 @@ class Dynamics(Model, ABC):
         self.r_k = Dense(1)
 
     @tf.function
-    def call(self, encoded_space, **kwargs) -> Tuple[tf.Tensor, tf.Tensor]:
+    def call(self, encoded_space, **kwargs):
         """
         :param encoded_space: hidden state concatenated with one_hot action
         :return: NetworkOutput with reward (r^k) and hidden state (s^k)
@@ -67,7 +67,7 @@ class Prediction(Model, ABC):
         self.value = Dense(1)
 
     @tf.function
-    def call(self, hidden_state, **kwargs) -> Tuple[tf.Tensor, tf.Tensor]:
+    def call(self, hidden_state, **kwargs):
         """
         :param hidden_state
         :return: NetworkOutput with policy logits and value
@@ -95,7 +95,7 @@ class Representation(Model, ABC):
         self.s0 = Dense(observation_space_size, activation=tf.nn.relu)
 
     @tf.function
-    def call(self, observation, **kwargs) -> tf.Tensor:
+    def call(self, observation, **kwargs):
         """
         :param observation
         :return: state s0

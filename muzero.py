@@ -35,11 +35,11 @@ def run_selfplay(config: MuZeroConfig, storage: SharedStorage, replay_buffer: Re
     # while True:
     returns = []
     network = storage.latest_network()
-    for _ in range(config.num_episodes):
+    for _ in range(config.num_games):
         game = play_game(config, network)
         replay_buffer.save_game(game)
         returns.append(sum(game.rewards))
-    return sum(returns) / config.num_episodes
+    return sum(returns) / config.num_games
 
 
 # Each game is produced by starting at the initial board position, then
@@ -119,12 +119,11 @@ def update_weights(optimizer: tf.keras.optimizers.Optimizer, network: Network, b
                 if target_policy:
 
                     l = tf.nn.softmax_cross_entropy_with_logits(
-                        logits=tf.stack(list(network_output.policy_logits.values())),
-                        labels=tf.convert_to_tensor(target_policy))
-                    l += scalar_loss(tf.constant(network_output.value, shape=(1, 1)), target_value)
+                        logits=list(network_output.policy_logits.values()),
+                        labels=target_policy)
+                    l += scalar_loss(network_output.value, target_value)
                     if k > 0:
-                        l += scalar_loss(tf.constant(network_output.reward, shape=(1, 1)),
-                                         tf.constant(target_reward, shape=(1, 1)))
+                        l += scalar_loss(network_output.reward, target_reward)
 
                     loss += scale_gradient(l, gradient_scale)
         loss /= len(batch)
@@ -138,16 +137,9 @@ def update_weights(optimizer: tf.keras.optimizers.Optimizer, network: Network, b
     network.increment_training_steps()
 
 
-def scalar_loss(prediction: tf.Tensor, target: tf.Tensor) -> tf.Tensor:
+def scalar_loss(prediction, target) -> float:
     # MSE in board games, cross entropy between categorical values in Atari.
-
-    if isinstance(prediction, float):
-        prediction = tf.constant(prediction, shape=(1, 1))
-
-    if isinstance(target, float):
-        target = tf.constant(target, shape=(1, 1))
-
-    return tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=prediction, labels=target))
+    return float(tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=prediction, labels=target)))
 
 
 ######### End Training ###########
@@ -162,17 +154,18 @@ def muzero(config: MuZeroConfig):
     storage = SharedStorage(config)
     replay_buffer = ReplayBuffer(config)
 
-    t = trange(config.training_loops, leave=True)
-    for _ in t:
-        score = run_selfplay(config, storage, replay_buffer)
-        write_summary(_, score)
-        train_network(config, storage, replay_buffer)
-        saved = ''
-        if _ % 10 == 0:
-            save_models(storage.latest_network())
-            saved = ' (Saved)'
-        t.set_description(f"Episode{saved}: {_}/{config.training_loops} - Score: {score:.2f}")
-        t.refresh()
+    with trange(config.episodes) as t:
+        for _ in range(config.episodes):
+            score = run_selfplay(config, storage, replay_buffer)
+            write_summary(_, score)
+            train_network(config, storage, replay_buffer)
+            saved = ''
+            if _ % 10 == 0:
+                save_models(storage.latest_network())
+                saved = ' (Saved)'
+            t.set_description(f"Episode{saved}: {_}/{config.episodes} - Score: {score:.2f}")
+            t.update(1)
+            t.refresh()
 
     return storage.latest_network()
 
