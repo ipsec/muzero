@@ -126,8 +126,8 @@ class Network(object):
         p, v = self.f_prediction(s_0)
 
         return NetworkOutput(
-            value=v,
-            reward=tf.constant(0.0),
+            value=float(v),
+            reward=float(0.0),
             policy_logits=NetworkOutput.build_policy_logits(policy_logits=p),
             hidden_state=s_0,
         )
@@ -144,8 +144,8 @@ class Network(object):
         p, v = self.f_prediction(s_k)
 
         return NetworkOutput(
-            value=v,
-            reward=r_k,
+            value=float(v),
+            reward=float(r_k),
             policy_logits=NetworkOutput.build_policy_logits(policy_logits=p),
             hidden_state=s_k
         )

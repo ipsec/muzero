@@ -57,8 +57,7 @@ def play_game(config: MuZeroConfig, network: Network) -> Game:
         current_observation = game.make_image(-1)
         network_output = network.initial_inference(current_observation)
         expand_node(root, game.to_play(), game.legal_actions(), network_output)
-        backpropagate([root], network_output.value, game.to_play(), config.discount,
-                      min_max_stats)
+        backpropagate([root], network_output.value, game.to_play(), config.discount, min_max_stats)
         add_exploration_noise(config, root)
 
         # We then run a Monte Carlo Tree Search using only action sequences and the
@@ -97,6 +96,7 @@ def scale_gradient(tensor: Any, scale):
 def update_weights(optimizer: tf.keras.optimizers.Optimizer, network: Network, batch, weight_decay: float):
     def loss():
         loss = 0
+
         for observations, actions, targets in batch:
             # Initial step, from the real observation.
             network_output = network.initial_inference(observations)
@@ -115,17 +115,15 @@ def update_weights(optimizer: tf.keras.optimizers.Optimizer, network: Network, b
                 gradient_scale, network_output = prediction
                 target_value, target_reward, target_policy = target
 
-                # TODO: Freeze here, because target_policy return a empty list (terminal states?)
                 if target_policy:
-
                     l = tf.nn.softmax_cross_entropy_with_logits(
-                        logits=list(network_output.policy_logits.values()),
-                        labels=target_policy)
-                    l += scalar_loss(network_output.value, target_value)
+                        logits=list(network_output.policy_logits.values()), labels=target_policy)
+                    l += scalar_loss([network_output.value], [target_value])
                     if k > 0:
-                        l += scalar_loss(network_output.reward, target_reward)
+                        l += scalar_loss([network_output.reward], [target_reward])
 
                     loss += scale_gradient(l, gradient_scale)
+
         loss /= len(batch)
 
         for weights in network.get_weights():
@@ -137,9 +135,9 @@ def update_weights(optimizer: tf.keras.optimizers.Optimizer, network: Network, b
     network.increment_training_steps()
 
 
-def scalar_loss(prediction, target) -> float:
-    # MSE in board games, cross entropy between categorical values in Atari.
-    return float(tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=prediction, labels=target)))
+def scalar_loss(prediction, target):
+    return tf.reduce_sum(tf.nn.softmax_cross_entropy_with_logits(labels=target, logits=prediction))
+
 
 
 ######### End Training ###########

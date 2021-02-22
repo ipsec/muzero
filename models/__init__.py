@@ -13,4 +13,4 @@ class NetworkOutput:
 
     @staticmethod
     def build_policy_logits(policy_logits):
-        return {Action(i): float(logit) for i, logit in enumerate(policy_logits[0])}
+        return {Action(i): logit for i, logit in enumerate(policy_logits[0])}
