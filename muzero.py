@@ -161,7 +161,7 @@ def muzero(config: MuZeroConfig):
             if _ % 10 == 0:
                 save_models(storage.latest_network())
                 saved = ' (Saved)'
-            t.set_description(f"Episode{saved}: {_}/{config.episodes} - Score: {score:.2f}")
+            t.set_description(f"Score{saved}: {score:.2f}")
             t.update(1)
             t.refresh()
 

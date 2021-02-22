@@ -184,13 +184,13 @@ def make_atari_config() -> MuZeroConfig:
         max_moves=27000,  # Half an hour at action repeat 4.
         discount=0.997,
         dirichlet_alpha=0.25,
-        num_simulations=5,
+        num_simulations=15,
         batch_size=24,
         td_steps=10,
-        num_actors=1,
+        num_actors=10,
         num_games=10,
         episodes=10,
         lr_init=0.05,
-        training_steps=10,
+        training_steps=100,
         lr_decay_steps=350e3,
         visit_softmax_temperature_fn=visit_softmax_temperature)
