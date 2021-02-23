@@ -5,8 +5,10 @@
 # pylint: disable=g-explicit-length-test
 from pathlib import Path
 from typing import Any
+import numpy as np
 
 import tensorflow as tf
+from tensorflow.keras.optimizers import Adam
 
 # MuZero training is split into two independent parts: Network training and
 # self-play data generation.
@@ -23,6 +25,9 @@ from storage import SharedStorage
 from summary import write_summary
 from utils import MinMaxStats
 
+from concurrent.futures.thread import ThreadPoolExecutor
+from concurrent.futures import as_completed
+import multiprocessing as mp
 
 ##################################
 ####### Part 1: Self-Play ########
@@ -35,10 +40,16 @@ def run_selfplay(config: MuZeroConfig, storage: SharedStorage, replay_buffer: Re
     # while True:
     returns = []
     network = storage.latest_network()
-    for _ in range(config.num_games):
-        game = play_game(config, network)
-        replay_buffer.save_game(game)
-        returns.append(sum(game.rewards))
+
+    with trange(config.num_games, leave=False) as t:
+        for _ in range(config.num_games):
+            game = play_game(config, network)
+            replay_buffer.save_game(game)
+            returns.append(sum(game.rewards))
+            t.set_description(f"Game Reward Mean: {np.mean(returns):.2f}")
+            t.update(1)
+            t.refresh()
+
     return sum(returns) / config.num_games
 
 
@@ -78,13 +89,18 @@ def play_game(config: MuZeroConfig, network: Network) -> Game:
 
 def train_network(config: MuZeroConfig, storage: SharedStorage, replay_buffer: ReplayBuffer):
     network = Network(config)
-    optimizer = tf.keras.optimizers.Adam(learning_rate=0.01)
+    optimizer = Adam(learning_rate=0.01)
 
-    for _ in range(config.training_steps):
-        if _ % config.checkpoint_interval == 0:
-            storage.save_network(_, network)
-        batch = replay_buffer.sample_batch(config.num_unroll_steps, config.td_steps)
-        update_weights(optimizer, network, batch, config.weight_decay)
+    with trange(config.training_steps, leave=False) as t:
+        for _ in range(config.training_steps):
+            if _ % config.checkpoint_interval == 0:
+                storage.save_network(_, network)
+            batch = replay_buffer.sample_batch(config.num_unroll_steps, config.td_steps)
+            update_weights(optimizer, network, batch, config.weight_decay)
+            t.set_description(f"Updating weights")
+            t.update(1)
+            t.refresh()
+
     storage.save_network(config.training_steps, network)
 
 
@@ -137,7 +153,6 @@ def update_weights(optimizer: tf.keras.optimizers.Optimizer, network: Network, b
 
 def scalar_loss(prediction, target):
     return tf.reduce_sum(tf.nn.softmax_cross_entropy_with_logits(labels=target, logits=prediction))
-
 
 
 ######### End Training ###########
