@@ -5,11 +5,10 @@
 # pylint: disable=g-explicit-length-test
 from pathlib import Path
 from typing import Any
-import numpy as np
 
+import numpy as np
 import tensorflow as tf
 from tensorflow.keras.optimizers import Adam
-
 # MuZero training is split into two independent parts: Network training and
 # self-play data generation.
 # These two parts only communicate by transferring the latest network checkpoint
@@ -25,9 +24,6 @@ from storage import SharedStorage
 from summary import write_summary
 from utils import MinMaxStats
 
-from concurrent.futures.thread import ThreadPoolExecutor
-from concurrent.futures import as_completed
-import multiprocessing as mp
 
 ##################################
 ####### Part 1: Self-Play ########
@@ -88,20 +84,21 @@ def play_game(config: MuZeroConfig, network: Network) -> Game:
 
 
 def train_network(config: MuZeroConfig, storage: SharedStorage, replay_buffer: ReplayBuffer):
-    network = Network(config)
+    #network = Network(config)
+    network = storage.latest_network()
     optimizer = Adam(learning_rate=0.01)
 
     with trange(config.training_steps, leave=False) as t:
         for _ in range(config.training_steps):
-            if _ % config.checkpoint_interval == 0:
-                storage.save_network(_, network)
             batch = replay_buffer.sample_batch(config.num_unroll_steps, config.td_steps)
             update_weights(optimizer, network, batch, config.weight_decay)
+            #if _ % config.checkpoint_interval == 0:
+            storage.save_network(_, network)
             t.set_description(f"Updating weights")
             t.update(1)
             t.refresh()
 
-    storage.save_network(config.training_steps, network)
+    #storage.save_network(config.training_steps, network)
 
 
 def scale_gradient(tensor: Any, scale):
@@ -165,10 +162,10 @@ def scalar_loss(prediction, target):
 
 def muzero(config: MuZeroConfig):
     storage = SharedStorage(config)
-    replay_buffer = ReplayBuffer(config)
 
     with trange(config.episodes) as t:
         for _ in range(config.episodes):
+            replay_buffer = ReplayBuffer(config)
             score = run_selfplay(config, storage, replay_buffer)
             write_summary(_, score)
             train_network(config, storage, replay_buffer)
