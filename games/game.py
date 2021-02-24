@@ -177,12 +177,12 @@ def make_atari_config() -> MuZeroConfig:
         discount=0.999,
         dirichlet_alpha=0.25,
         num_simulations=15,     # Number of future moves self-simulated
-        batch_size=32,
+        batch_size=64,
         td_steps=30,            # Number of steps in the future to take into account for calculating the target value
         num_actors=1,
         num_games=2,
-        training_steps=10,
-        episodes=10000,
-        lr_init=0.005,
-        lr_decay_steps=1000,
+        training_steps=50,
+        episodes=1000,
+        lr_init=0.001,
+        lr_decay_steps=10,
         visit_softmax_temperature_fn=visit_softmax_temperature)
