@@ -15,5 +15,5 @@ class SharedStorage(object):
             # policy -> uniform, value -> 0, reward -> 0
             return Network(self.config)
 
-    def save_network(self, step: int, network: Network):
-        self._networks[step] = network
+    def save_network(self, network: Network):
+        self._networks[len(self._networks)] = network

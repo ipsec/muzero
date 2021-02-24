@@ -34,19 +34,15 @@ from utils import MinMaxStats
 # writing it to a shared replay buffer.
 def run_selfplay(config: MuZeroConfig, storage: SharedStorage, replay_buffer: ReplayBuffer):
     # while True:
-    returns = []
     network = storage.latest_network()
 
     with trange(config.num_games, leave=False) as t:
         for _ in range(config.num_games):
             game = play_game(config, network)
             replay_buffer.save_game(game)
-            returns.append(sum(game.rewards))
-            t.set_description(f"Game Reward Mean: {np.mean(returns):.2f}")
+            t.set_description(f"Running Games")
             t.update(1)
             t.refresh()
-
-    return sum(returns) / config.num_games
 
 
 # Each game is produced by starting at the initial board position, then
@@ -84,21 +80,20 @@ def play_game(config: MuZeroConfig, network: Network) -> Game:
 
 
 def train_network(config: MuZeroConfig, storage: SharedStorage, replay_buffer: ReplayBuffer):
-    #network = Network(config)
     network = storage.latest_network()
     optimizer = Adam(learning_rate=0.01)
 
     with trange(config.training_steps, leave=False) as t:
         for _ in range(config.training_steps):
             batch = replay_buffer.sample_batch(config.num_unroll_steps, config.td_steps)
-            update_weights(optimizer, network, batch, config.weight_decay)
-            #if _ % config.checkpoint_interval == 0:
-            storage.save_network(_, network)
+            loss_mean = update_weights(optimizer, network, batch, config.weight_decay)
+            write_summary(_, loss_mean)
+            storage.save_network(network)
             t.set_description(f"Updating weights")
             t.update(1)
             t.refresh()
 
-    #storage.save_network(config.training_steps, network)
+    storage.save_network(network)
 
 
 def scale_gradient(tensor: Any, scale):
@@ -107,6 +102,8 @@ def scale_gradient(tensor: Any, scale):
 
 
 def update_weights(optimizer: tf.keras.optimizers.Optimizer, network: Network, batch, weight_decay: float):
+    losses = []
+
     def loss():
         loss = 0
 
@@ -142,10 +139,13 @@ def update_weights(optimizer: tf.keras.optimizers.Optimizer, network: Network, b
         for weights in network.get_weights():
             loss += weight_decay * tf.nn.l2_loss(weights)
 
+        losses.append(loss)
+
         return loss
 
     optimizer.minimize(loss, var_list=network.cb_get_variables())
     network.increment_training_steps()
+    return np.mean(losses)
 
 
 def scalar_loss(prediction, target):
@@ -162,22 +162,12 @@ def scalar_loss(prediction, target):
 
 def muzero(config: MuZeroConfig):
     storage = SharedStorage(config)
+    replay_buffer = ReplayBuffer(config)
 
-    with trange(config.episodes) as t:
-        for _ in range(config.episodes):
-            replay_buffer = ReplayBuffer(config)
-            score = run_selfplay(config, storage, replay_buffer)
-            write_summary(_, score)
-            train_network(config, storage, replay_buffer)
-            saved = ''
-            if _ % 10 == 0:
-                save_models(storage.latest_network())
-                saved = ' (Saved)'
-            t.set_description(f"Score{saved}: {score:.2f}")
-            t.update(1)
-            t.refresh()
-
-    return storage.latest_network()
+    run_selfplay(config, storage, replay_buffer)
+    train_network(config, storage, replay_buffer)
+    save_models(storage.latest_network())
+    tf.saved_model.save(storage.latest_network(), "./data/saved_model/")
 
 
 def save_models(network: Network):
@@ -192,7 +182,4 @@ def save_models(network: Network):
 
 if __name__ == "__main__":
     config = make_atari_config()
-    # network = muzero(config)
-    # save_models(network)
-
     muzero(config)
