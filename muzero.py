@@ -167,7 +167,6 @@ def muzero(config: MuZeroConfig):
         for _ in range(config.episodes):
             replay_buffer = ReplayBuffer(config)
             score = run_selfplay(config, storage, replay_buffer)
-            print(score)
             write_summary(_, score)
             train_network(config, storage, replay_buffer)
             saved = ''
