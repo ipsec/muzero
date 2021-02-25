@@ -169,14 +169,14 @@ def make_atari_config() -> MuZeroConfig:
     def visit_softmax_temperature(config: MuZeroConfig, num_moves, training_steps):
         temp = 1.0
 
-        if training_steps > int(config.training_steps):
-            temp = 1.0
+        if training_steps < int(config.training_steps):
+            temp = 0.25
 
-        if training_steps > int(config.training_steps / 2):
+        if training_steps < int(config.training_steps / 2):
             temp = 0.5
 
-        if training_steps > int(config.training_steps / 3):
-            temp = 0.25
+        if training_steps < int(config.training_steps / 3):
+            temp = 1.0
 
         return temp
 
@@ -186,12 +186,12 @@ def make_atari_config() -> MuZeroConfig:
         max_moves=700,  # Half an hour at action repeat 4.
         discount=0.999,
         dirichlet_alpha=0.25,
-        num_simulations=15,  # Number of future moves self-simulated
+        num_simulations=50,  # Number of future moves self-simulated
         batch_size=64,
-        td_steps=10,  # Number of steps in the future to take into account for calculating the target value
+        td_steps=25,  # Number of steps in the future to take into account for calculating the target value
         num_actors=1,
-        num_games=1000,
-        training_steps=1000,
+        num_games=10,
+        training_steps=100,
         episodes=5000,
         lr_init=0.001,
         lr_decay_steps=10,

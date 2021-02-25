@@ -7,6 +7,6 @@ data_path.mkdir(parents=True, exist_ok=True)
 summary_writer = tf.summary.create_file_writer(str(data_path) + "/summary/")
 
 
-def write_summary(episode, loss):
+def write_summary(episode, score):
     with summary_writer.as_default():
-        tf.summary.scalar("Loss", loss, step=episode)
+        tf.summary.scalar("Score", score, step=episode)
