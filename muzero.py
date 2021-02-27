@@ -4,6 +4,8 @@
 # pylint: disable=missing-docstring
 # pylint: disable=g-explicit-length-test
 from pathlib import Path
+from threading import Thread
+from time import sleep
 from typing import Any
 
 import numpy as np
@@ -33,17 +35,10 @@ from utils import MinMaxStats
 # snapshot, produces a game and makes it available to the training job by
 # writing it to a shared replay buffer.
 def run_selfplay(config: MuZeroConfig, storage: SharedStorage, replay_buffer: ReplayBuffer):
-    # while True:
-    network = storage.latest_network()
-    rewards = []
-
-    for _ in range(config.num_games):
+    while True:
+        network = storage.latest_network()
         game = play_game(config, network)
-        rewards.append(np.sum(game.rewards))
         replay_buffer.save_game(game)
-
-    return np.mean(rewards)
-
 
 
 # Each game is produced by starting at the initial board position, then
@@ -149,23 +144,39 @@ def scalar_loss(prediction, target):
 ################################################################################
 ############################# End of pseudocode ################################
 ################################################################################
+def launch_job(f, *args):
+    f(*args)
 
 
 def muzero(config: MuZeroConfig):
     storage = SharedStorage(config)
+    replay_buffer = ReplayBuffer(config)
 
-    with trange(10000) as t:
-        for i in range(10000):
-            replay_buffer = ReplayBuffer(config)
-            score = run_selfplay(config, storage, replay_buffer)
-            write_summary(i, score)
-            train_network(config, storage, replay_buffer)
-            save_checkpoints(storage.latest_network())
-            t.set_description(f"Score: {score:.2f}")
+    with trange(config.num_actors) as t:
+        for _ in range(config.num_actors):
+            actor = Thread(name='games', target=run_selfplay, args=(config, storage, replay_buffer))
+            actor.start()
+            # launch_job(run_selfplay, config, storage, replay_buffer)
+            # score = run_selfplay(config, storage, replay_buffer)
             t.update(1)
             t.refresh()
 
-    export_models(storage.latest_network())
+    with trange(config.episodes) as t:
+        while len(replay_buffer.buffer) < config.batch_size:
+            pass
+
+        for _ in range(config.episodes):
+            reward_mean = np.mean([np.sum(game.rewards) for game in replay_buffer.buffer])
+            write_summary(_, reward_mean)
+            train_network(config, storage, replay_buffer)
+            save_checkpoints(storage.latest_network())
+            t.update(1)
+            t.refresh()
+
+        export_models(storage.latest_network())
+        #write_summary(i, score)
+        t.update(1)
+        t.refresh()
 
 
 def save_checkpoints(network: Network):
@@ -194,7 +205,7 @@ def export_models(network: Network):
         for model in network.get_networks():
             path = Path(f'./data/saved_model/{model.__class__.__name__}')
             Path.mkdir(path, parents=True, exist_ok=True)
-            tf.saved_model.save(model, path)
+            tf.saved_model.save(model, str(path.absolute()))
             print(f"Model {model.__class__.__name__} Saved!")
     except Exception as e:
         print(f"Unable to save networks. {e}")
