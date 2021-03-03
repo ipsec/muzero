@@ -37,10 +37,10 @@ from utils import MinMaxStats
 # snapshot, produces a game and makes it available to the training job by
 # writing it to a shared replay buffer.
 def run_selfplay(config: MuZeroConfig, storage: SharedStorage, replay_buffer: ReplayBuffer):
-    #while True:
-    network = storage.latest_network()
-    game = play_game(config, network)
-    replay_buffer.save_game(game)
+    while True:
+        network = storage.latest_network()
+        game = play_game(config, network)
+        replay_buffer.save_game(game)
 
 
 # Each game is produced by starting at the initial board position, then
@@ -77,18 +77,14 @@ def play_game(config: MuZeroConfig, network: Network) -> Game:
 ####### Part 2: Training #########
 
 
-def train_network(config: MuZeroConfig,
-                  storage: SharedStorage,
-                  replay_buffer: ReplayBuffer,
-                  optimizer: tf.keras.optimizers.Optimizer = None):
+def train_network(config: MuZeroConfig, storage: SharedStorage, replay_buffer: ReplayBuffer):
     network = storage.latest_network()
-
-    if not optimizer:
-        optimizer = Adam(learning_rate=0.001)
+    optimizer = Adam(learning_rate=0.001)
 
     for _ in range(config.training_steps):
         batch = replay_buffer.sample_batch(config.num_unroll_steps, config.td_steps)
         update_weights(optimizer, network, batch, config.weight_decay)
+        storage.save_network(network)
 
     storage.save_network(network)
 
@@ -121,20 +117,13 @@ def update_weights(optimizer: tf.keras.optimizers.Optimizer, network: Network, b
                 target_value, target_reward, target_policy = target
 
                 if target_policy:
-                    policy_loss = scalar_loss(
-                        tf.stack(list(network_output.policy_logits.values())),
-                        tf.convert_to_tensor(target_policy))
-                    value_loss = scalar_loss(
-                        tf.constant(network_output.value, shape=(1,), dtype=tf.float32),
-                        tf.constant(target_value, shape=(1,), dtype=tf.float32))
-                    reward_loss = 0
-
+                    l = tf.nn.softmax_cross_entropy_with_logits(
+                        logits=list(network_output.policy_logits.values()), labels=target_policy)
+                    l += scalar_loss([network_output.value], [target_value])
                     if k > 0:
-                        reward_loss = scalar_loss(
-                            tf.constant(network_output.reward, shape=(1,), dtype=tf.float32),
-                            tf.constant(target_reward, shape=(1,), dtype=tf.float32))
+                        l += scalar_loss([network_output.reward], [target_reward])
 
-                    loss += scale_gradient((value_loss * 0.25) + policy_loss + reward_loss, gradient_scale)
+                    loss += scale_gradient(l, gradient_scale)
 
         loss /= len(batch)
 
@@ -148,8 +137,7 @@ def update_weights(optimizer: tf.keras.optimizers.Optimizer, network: Network, b
 
 
 def scalar_loss(prediction, target):
-    return tf.reduce_sum(tf.nn.log_softmax(-target * tf.nn.log_softmax(prediction)))
-    #return tf.reduce_sum(tf.nn.softmax_cross_entropy_with_logits(labels=target, logits=prediction))
+    return tf.reduce_sum(tf.nn.softmax_cross_entropy_with_logits(labels=target, logits=prediction))
 
 
 ######### End Training ###########
@@ -166,14 +154,27 @@ def muzero(config: MuZeroConfig):
     storage = SharedStorage(config)
     replay_buffer = ReplayBuffer(config)
 
+    with trange(config.num_actors) as t:
+        for _ in range(config.num_actors):
+            # with ThreadPoolExecutor(max_workers=3) as executor:
+            #    executor.submit(run_selfplay, args=(config, storage, replay_buffer))
+            actor = Thread(target=run_selfplay, args=(config, storage, replay_buffer))
+            # actor = Process(target=run_selfplay, args=(config, storage, replay_buffer))
+            actor.start()
+            # launch_job(run_selfplay, config, storage, replay_buffer)
+            # score = run_selfplay(config, storage, replay_buffer)
+            t.update(1)
+            t.refresh()
+
     with trange(config.episodes) as t:
+        while len(replay_buffer.buffer) < config.batch_size:
+            pass
+
         for _ in range(config.episodes):
-            launch_job(run_selfplay, config, storage, replay_buffer)
-            if len(replay_buffer.buffer) >= config.batch_size:
-                #reward_mean = np.mean([np.sum(game.rewards) for game in replay_buffer.buffer])
-                #write_summary(_, reward_mean)
-                train_network(config, storage, replay_buffer)
-                save_checkpoints(storage.latest_network())
+            reward_mean = np.mean([np.sum(game.rewards) for game in replay_buffer.buffer])
+            write_summary(_, reward_mean)
+            train_network(config, storage, replay_buffer)
+            save_checkpoints(storage.latest_network())
             t.update(1)
             t.refresh()
 

@@ -1,5 +1,5 @@
 from abc import ABC
-from typing import Tuple, Callable, List
+from typing import Callable, List
 
 import tensorflow as tf
 from tensorflow.keras.layers import Dense
@@ -24,21 +24,25 @@ h = representation
 """
 
 
+def scale(t: tf.Tensor):
+    return (t - tf.reduce_min(t)) / (tf.reduce_max(t) - tf.reduce_min(t))
+
+
 class Dynamics(Model, ABC):
-    def __init__(self, hidden_state_size: int):
+    def __init__(self, hidden_state_size: int, encoded_space_size: int):
         """
         r^k, s^k = g_0(s^(k-1), a^k)
-        :param hidden_state_size: size of hidden state
+        :param encoded_space_size: size of hidden state
         """
         super(Dynamics, self).__init__()
-        neurons = 128
-        self.inputs = Dense(neurons, activation=tf.nn.relu)
+        neurons = 32
+        self.inputs = Dense(neurons, input_shape=(encoded_space_size,), activation=tf.nn.relu)
         self.hidden = Dense(neurons, activation=tf.nn.relu)
         self.common = Dense(neurons, activation=tf.nn.relu)
         self.s_k = Dense(hidden_state_size, activation=tf.nn.relu)
         self.r_k = Dense(1)
 
-    #@tf.function(experimental_relax_shapes=True)
+    @tf.function
     def call(self, encoded_space, **kwargs):
         """
         :param encoded_space: hidden state concatenated with one_hot action
@@ -49,24 +53,24 @@ class Dynamics(Model, ABC):
         x = self.common(x)
         s_k = self.s_k(x)
         r_k = self.r_k(x)
-        return s_k, r_k
+        return scale(s_k), r_k
 
 
 class Prediction(Model, ABC):
-    def __init__(self, action_state_size: int):
+    def __init__(self, action_state_size: int, hidden_state_size: int):
         """
         p^k, v^k = f_0(s^k)
         :param action_state_size: size of action state
         """
         super(Prediction, self).__init__()
-        neurons = 128
-        self.inputs = Dense(neurons, activation=tf.nn.relu)
+        neurons = 32
+        self.inputs = Dense(neurons, input_shape=(hidden_state_size,), activation=tf.nn.relu)
         self.hidden = Dense(neurons, activation=tf.nn.relu)
         self.common = Dense(neurons, activation=tf.nn.relu)
-        self.policy = Dense(action_state_size, activation=tf.nn.tanh)
+        self.policy = Dense(action_state_size, activation=tf.nn.relu)
         self.value = Dense(1)
 
-    #@tf.function(experimental_relax_shapes=True)
+    @tf.function
     def call(self, hidden_state, **kwargs):
         """
         :param hidden_state
@@ -78,7 +82,7 @@ class Prediction(Model, ABC):
         policy = self.policy(x)
         value = self.value(x)
 
-        return policy, value
+        return scale(policy), value
 
 
 class Representation(Model, ABC):
@@ -88,13 +92,13 @@ class Representation(Model, ABC):
         :param observation_space_size
         """
         super(Representation, self).__init__()
-        neurons = 128
-        self.inputs = Dense(neurons, activation=tf.nn.relu)
+        neurons = 32
+        self.inputs = Dense(neurons, input_shape=(observation_space_size,), activation=tf.nn.relu)
         self.hidden = Dense(neurons, activation=tf.nn.relu)
         self.common = Dense(neurons, activation=tf.nn.relu)
         self.s0 = Dense(observation_space_size, activation=tf.nn.relu)
 
-    #@tf.function(experimental_relax_shapes=True)
+    @tf.function
     def call(self, observation, **kwargs):
         """
         :param observation
@@ -105,14 +109,14 @@ class Representation(Model, ABC):
         x = self.hidden(x)
         x = self.common(x)
         s_0 = self.s0(x)
-        return s_0
+        return scale(s_0)
 
 
 class Network(object):
     def __init__(self, config: MuZeroConfig):
         self.config = config
-        self.g_dynamics = Dynamics(config.state_space_size)
-        self.f_prediction = Prediction(config.action_space_size)
+        self.g_dynamics = Dynamics(config.state_space_size, config.action_space_size + config.state_space_size)
+        self.f_prediction = Prediction(config.action_space_size, config.state_space_size)
         self.h_representation = Representation(config.state_space_size)
         self._training_steps = 0
 

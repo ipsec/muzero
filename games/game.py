@@ -1,3 +1,4 @@
+import random
 from typing import List
 
 import gym
@@ -77,6 +78,9 @@ class Game(object):
 
     def terminal(self) -> bool:
         # Game specific termination rules.
+        if self.done:
+            self.env.close()
+
         return self.done
 
     def legal_actions(self) -> List[Action]:
@@ -158,11 +162,13 @@ class ReplayBuffer(object):
 
     def sample_game(self) -> Game:
         # Sample game from buffer either uniformly or according to some priority.
-        return np.random.choice(self.buffer)
+        return random.choice(self.buffer)
+        #return np.random.choice(self.buffer)
 
     def sample_position(self, game) -> int:
         # Sample position from game either uniformly or according to some priority.
-        return np.random.choice(len(game.history))
+        return random.randrange(len(game.history))
+        #return np.random.choice(len(game.history))
 
 
 def make_atari_config() -> MuZeroConfig:
@@ -181,21 +187,21 @@ def make_atari_config() -> MuZeroConfig:
         return temp
         """
 
-        return 1.0
+        return 0.35
 
     return MuZeroConfig(
         state_space_size=8,
         action_space_size=4,
-        max_moves=700,          # Half an hour at action repeat 4.
-        discount=0.999,
+        max_moves=500,          # Half an hour at action repeat 4.
+        discount=0.997,
         dirichlet_alpha=0.25,
-        num_simulations=50,      # Number of future moves self-simulated
-        batch_size=32,
+        num_simulations=20,      # Number of future moves self-simulated
+        batch_size=1,
         td_steps=10,             # Number of steps in the future to take into account for calculating the target value
-        num_actors=4,
-        num_games=1,
-        training_steps=10,
+        num_actors=1,
+        num_games=10,
+        training_steps=100,
         episodes=5000,
         lr_init=0.001,
-        lr_decay_steps=10,
+        lr_decay_steps=1000,
         visit_softmax_temperature_fn=visit_softmax_temperature)
