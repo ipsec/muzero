@@ -21,7 +21,6 @@ from games.game import ReplayBuffer, Game, make_atari_config
 from mcts import Node, expand_node, backpropagate, add_exploration_noise, run_mcts, select_action
 from models.network import Network
 from storage import SharedStorage
-from summary import write_summary
 from utils import MinMaxStats
 
 
@@ -226,7 +225,7 @@ def muzero(config: MuZeroConfig):
             for i in range(config.num_games):
                 score = run_selfplay(config, storage, replay_buffer)
                 score_mean = np.mean([np.sum(game.rewards) for game in replay_buffer.buffer])
-                print(f"Score: {score:.2f} - {score_mean:.2f}")
+                logging.info(f"Score: {score:.2f} - {score_mean:.2f}")
                 #write_summary(count, score)
                 count += 1
             if len(replay_buffer.buffer) >= config.batch_size:
