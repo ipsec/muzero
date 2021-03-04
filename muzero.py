@@ -291,3 +291,4 @@ if __name__ == "__main__":
     ray.init()
     config = make_atari_config()
     muzero(config)
+    ray.shutdown()
