@@ -40,7 +40,7 @@ class Dynamics(Model, ABC):
         self.hidden = Dense(neurons, activation=tf.nn.relu)
         self.common = Dense(neurons, activation=tf.nn.relu)
         self.s_k = Dense(hidden_state_size, activation=tf.nn.relu)
-        self.r_k = Dense(1)
+        self.r_k = Dense(1, kernel_initializer=tf.keras.initializers.Zeros)
 
     @tf.function
     def call(self, encoded_space, **kwargs):
@@ -67,8 +67,9 @@ class Prediction(Model, ABC):
         self.inputs = Dense(neurons, input_shape=(hidden_state_size,), activation=tf.nn.relu)
         self.hidden = Dense(neurons, activation=tf.nn.relu)
         self.common = Dense(neurons, activation=tf.nn.relu)
-        self.policy = Dense(action_state_size, activation=tf.nn.relu)
-        self.value = Dense(1)
+        self.policy = Dense(action_state_size, activation=tf.nn.relu,
+                            kernel_initializer=tf.keras.initializers.RandomUniform)
+        self.value = Dense(1, kernel_initializer=tf.keras.initializers.Zeros)
 
     @tf.function
     def call(self, hidden_state, **kwargs):

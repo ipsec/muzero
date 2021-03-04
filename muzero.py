@@ -3,12 +3,8 @@
 # pylint: disable=unused-argument
 # pylint: disable=missing-docstring
 # pylint: disable=g-explicit-length-test
-from concurrent.futures.thread import ThreadPoolExecutor
 from pathlib import Path
-from threading import Thread
-from time import sleep
 from typing import Any
-from multiprocessing import Process
 
 import numpy as np
 import tensorflow as tf
@@ -37,10 +33,11 @@ from utils import MinMaxStats
 # snapshot, produces a game and makes it available to the training job by
 # writing it to a shared replay buffer.
 def run_selfplay(config: MuZeroConfig, storage: SharedStorage, replay_buffer: ReplayBuffer):
-    #while True:
+    # while True:
     network = storage.latest_network()
     game = play_game(config, network)
     replay_buffer.save_game(game)
+    return tf.reduce_sum(game.rewards)
 
 
 # Each game is produced by starting at the initial board position, then
@@ -99,8 +96,9 @@ def scale_gradient(tensor: Any, scale):
 
 
 def update_weights(optimizer: tf.keras.optimizers.Optimizer, network: Network, batch, weight_decay: float):
-    def loss():
-        loss = 0
+    loss = 0
+
+    with tf.GradientTape() as f_tape, tf.GradientTape() as g_tape, tf.GradientTape() as h_tape:
 
         for observations, actions, targets in batch:
             # Initial step, from the real observation.
@@ -121,35 +119,91 @@ def update_weights(optimizer: tf.keras.optimizers.Optimizer, network: Network, b
                 target_value, target_reward, target_policy = target
 
                 if target_policy:
-                    policy_loss = scalar_loss(
-                        tf.stack(list(network_output.policy_logits.values())),
-                        tf.convert_to_tensor(target_policy))
-                    value_loss = scalar_loss(
-                        tf.constant(network_output.value, shape=(1,), dtype=tf.float32),
-                        tf.constant(target_value, shape=(1,), dtype=tf.float32))
-                    reward_loss = 0
+                    policy_loss = tf.nn.softmax_cross_entropy_with_logits(
+                        logits=tf.stack(list(network_output.policy_logits.values())),
+                        labels=tf.convert_to_tensor(target_policy))
+                else:
+                    policy_loss = 0.0
 
-                    if k > 0:
-                        reward_loss = scalar_loss(
-                            tf.constant(network_output.reward, shape=(1,), dtype=tf.float32),
-                            tf.constant(target_reward, shape=(1,), dtype=tf.float32))
+                value_loss = scalar_loss(
+                    tf.constant(network_output.value, shape=(1,), dtype=tf.float32),
+                    tf.constant(target_value, shape=(1,), dtype=tf.float32))
+                reward_loss = 0
 
-                    loss += scale_gradient((value_loss * 0.25) + policy_loss + reward_loss, gradient_scale)
+                if k > 0:
+                    reward_loss = scalar_loss(
+                        tf.constant(network_output.reward, shape=(1,), dtype=tf.float32),
+                        tf.constant(target_reward, shape=(1,), dtype=tf.float32))
+
+                loss += scale_gradient((value_loss * 0.25) + policy_loss + reward_loss, gradient_scale)
 
         loss /= len(batch)
 
         for weights in network.get_weights():
             loss += weight_decay * tf.nn.l2_loss(weights)
 
-        return loss
+    f_grad = f_tape.gradient(loss, network.f_prediction.trainable_variables)
+    g_grad = g_tape.gradient(loss, network.g_dynamics.trainable_variables)
+    h_grad = h_tape.gradient(loss, network.h_representation.trainable_variables)
+    optimizer.apply_gradients(zip(f_grad, network.f_prediction.trainable_variables))
+    optimizer.apply_gradients(zip(g_grad, network.g_dynamics.trainable_variables))
+    optimizer.apply_gradients(zip(h_grad, network.h_representation.trainable_variables))
 
-    optimizer.minimize(loss, var_list=network.cb_get_variables())
     network.increment_training_steps()
 
 
 def scalar_loss(prediction, target):
-    return tf.reduce_sum(tf.nn.log_softmax(-target * tf.nn.log_softmax(prediction)))
-    #return tf.reduce_sum(tf.nn.softmax_cross_entropy_with_logits(labels=target, logits=prediction))
+    target = tf.math.sign(target) * (tf.math.sqrt(tf.math.abs(target) + 1) - 1) + 0.001 * target
+    # target_categorical = tf.keras.utils.to_categorical(target, num_classes=target.shape[0])
+    # return tf.reduce_sum(tf.keras.losses.MSE(y_true=target, y_pred=prediction))
+    # return tf.reduce_sum(-target * tf.math.log(prediction))
+    return tf.reduce_mean(
+        tf.nn.softmax_cross_entropy_with_logits(labels=target, logits=prediction)
+    )
+
+
+def support_to_scalar(logits, support_size, eps=0.001):
+    """
+    Transform a categorical representation to a scalar
+    See paper appendix Network Architecture
+    """
+    # Decode to a scalar
+    probabilities = tf.nn.softmax(logits, axis=1)
+    support = tf.expand_dims(tf.range(-support_size, support_size + 1), axis=0)
+    support = tf.tile(support, [logits.shape[0], 1])  # make batchsize supports
+    # Expectation under softmax
+    x = tf.cast(support, tf.float32) * probabilities
+    x = tf.reduce_sum(x, axis=-1)
+    # Inverse transform h^-1(x) from Lemma A.2.
+    # From "Observe and Look Further: Achieving Consistent Performance on Atari" - Pohlen et al.
+    x = tf.math.sign(x) * (((tf.math.sqrt(1. + 4. * eps * (tf.math.abs(x) + 1 + eps)) - 1) / (2 * eps)) ** 2 - 1)
+    x = tf.expand_dims(x, 1)
+    return x
+
+
+def scalar_to_support(x, support_size):
+    """
+    Transform a scalar to a categorical representation with (2 * support_size + 1) categories
+    See paper appendix Network Architecture
+    """
+    # Reduce the scale (defined in https://arxiv.org/abs/1805.11593)
+    x = tf.math.sign(x) * (tf.math.sqrt(tf.math.abs(x) + 1) - 1) + 0.001 * x
+
+    # Encode on a vector
+    # input (N,1)
+    x = tf.clip_by_value(x, -support_size, support_size)  # 50.3
+    floor = tf.math.floor(x)  # 50
+    prob_upper = x - floor  # 0.3
+    prob_lower = 1 - prob_upper  # 0.7
+    # Needs to become (N,601)
+    dim1_indices = tf.cast(tf.math.floor(x) + support_size, tf.int32)
+    dim0_indices = tf.expand_dims(tf.range(0, x.shape[0]), axis=1)  # this is just 0,1,2,3
+    lower_indices = tf.concat([dim0_indices, dim1_indices], axis=1)
+
+    supports = tf.scatter_nd(lower_indices, tf.squeeze(prob_lower, axis=1), shape=(x.shape[0], 2 * support_size + 1))
+    higher_indices = tf.concat([dim0_indices, tf.clip_by_value(dim1_indices + 1, 0, 2 * support_size)], axis=1)
+    supports = tf.tensor_scatter_nd_add(supports, higher_indices, tf.squeeze(prob_upper, axis=1))
+    return supports
 
 
 ######### End Training ###########
@@ -167,11 +221,15 @@ def muzero(config: MuZeroConfig):
     replay_buffer = ReplayBuffer(config)
 
     with trange(config.episodes) as t:
+        count = 0
         for _ in range(config.episodes):
-            launch_job(run_selfplay, config, storage, replay_buffer)
+            for i in range(config.num_games):
+                score = run_selfplay(config, storage, replay_buffer)
+                score_mean = np.mean([np.sum(game.rewards) for game in replay_buffer.buffer])
+                print(f"Score: {score:.2f} - {score_mean:.2f}")
+                #write_summary(count, score)
+                count += 1
             if len(replay_buffer.buffer) >= config.batch_size:
-                #reward_mean = np.mean([np.sum(game.rewards) for game in replay_buffer.buffer])
-                #write_summary(_, reward_mean)
                 train_network(config, storage, replay_buffer)
                 save_checkpoints(storage.latest_network())
             t.update(1)

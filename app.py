@@ -4,10 +4,10 @@ from threading import Thread
 
 import numpy as np
 import uvicorn
-from tensorflow.keras.optimizers import Adam
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from tensorflow.keras.optimizers import Adam
 
 from games.game import make_atari_config, ReplayBuffer
 from muzero import play_game, train_network, save_checkpoints
@@ -33,31 +33,24 @@ replay_buffer = ReplayBuffer(muzero_config)
 optimizer = Adam(learning_rate=0.01)
 
 @app.get('/')
-async def root():
+def root():
     return {"success": True}
-
-
-def train_muzero():
-    count = 1
-    while True:
-        # Run games
-        for _ in range(muzero_config.num_games):
-            network = storage.latest_network()
-            game = play_game(muzero_config, network)
-            write_summary(count, np.sum(game.rewards))
-            replay_buffer.save_game(game)
-            count += 1
-
-        # Train
-        if len(replay_buffer.buffer) >= muzero_config.batch_size:
-            train_network(muzero_config, storage, replay_buffer, optimizer)
-            save_checkpoints(storage.latest_network())
 
 
 @app.post('/train')
 async def train():
-    train_thread = Thread(target=train_muzero, name="training")
-    train_thread.start()
+    count = 0
+    while True:
+        for _ in range(muzero_config.num_games):
+            game = play_game(muzero_config, storage.latest_network())
+            write_summary(count, np.sum(game.rewards))
+            replay_buffer.save_game(game)
+            count += 1
+
+        if len(replay_buffer.buffer) >= muzero_config.batch_size:
+            train_network(muzero_config, storage, replay_buffer, optimizer)
+            save_checkpoints(storage.latest_network())
+
     return {"success": True}
 
 
