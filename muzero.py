@@ -4,7 +4,6 @@
 # pylint: disable=missing-docstring
 # pylint: disable=g-explicit-length-test
 from pathlib import Path
-from threading import Thread
 from typing import Any
 
 import numpy as np
@@ -217,29 +216,24 @@ def launch_job(f, *args):
     f(*args)
 
 
-def run_games(config, storage, replay_buffer):
-    while True:
-        run_selfplay(config, storage, replay_buffer)
-
-
 def muzero(config: MuZeroConfig):
     storage = SharedStorage(config)
     replay_buffer = ReplayBuffer(config)
 
-    thread_games = Thread(target=run_games, args=(config, storage, replay_buffer), name="games")
-    thread_games.start()
-
-    while len(replay_buffer.buffer) < config.batch_size:
-        pass
-
     with trange(config.episodes) as t:
+        count = 0
         for _ in range(config.episodes):
-            train_network(config, storage, replay_buffer)
-            save_checkpoints(storage.latest_network())
-            score_mean = np.mean([np.sum(game.rewards) for game in replay_buffer.buffer])
+            for i in range(config.num_games):
+                score = run_selfplay(config, storage, replay_buffer)
+                # write_summary(count, score)
+                count += 1
 
+            score_mean = np.mean([np.sum(game.rewards) for game in replay_buffer.buffer])
             t.set_description(f"Score Mean: {score_mean:.2f}")
 
+            if len(replay_buffer.buffer) >= config.batch_size:
+                train_network(config, storage, replay_buffer)
+                save_checkpoints(storage.latest_network())
             t.update(1)
             t.refresh()
 
