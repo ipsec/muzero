@@ -4,10 +4,10 @@
 # pylint: disable=missing-docstring
 # pylint: disable=g-explicit-length-test
 from pathlib import Path
+from threading import Thread
 from typing import Any
 
 import numpy as np
-import ray
 import tensorflow as tf
 from tensorflow.keras.optimizers import Adam
 # MuZero training is split into two independent parts: Network training and
@@ -217,10 +217,14 @@ def scalar_to_support(x, support_size):
 def launch_job(f, *args):
     f(*args)
 
-@ray.remote
-def run_game(config, storage):
-    network = storage.latest_network()
-    return play_game(config, network)
+
+def run_game(config, storage, replay_buffer):
+    count = 0
+    while True:
+        game = play_game(config, storage.latest_network())
+        replay_buffer.save_game(game)
+        write_summary(count, tf.reduce_sum(game.rewards))
+        count += 1
 
 
 def muzero(config: MuZeroConfig):
@@ -228,24 +232,17 @@ def muzero(config: MuZeroConfig):
     replay_buffer = ReplayBuffer(config)
 
     with trange(config.episodes) as t:
-        count = 0
+        thread_game = Thread(target=run_game, args=(config, storage, replay_buffer))
+        thread_game.start()
+
+        while not replay_buffer.buffer:
+            pass
+
         for _ in range(config.episodes):
-
-            result_ids = []
-            for i in range(config.num_games):
-                result_ids.append(run_game.remote(config, storage))
-
-            for game in ray.get(result_ids):
-                replay_buffer.save_game(game)
-                write_summary(count, tf.reduce_sum(game.rewards))
-                count += 1
-
             score_mean = np.mean([np.sum(game.rewards) for game in replay_buffer.buffer])
             t.set_description(f"Score Mean: {score_mean:.2f}")
-
-            if len(replay_buffer.buffer) >= config.batch_size:
-                train_network(config, storage, replay_buffer)
-                save_checkpoints(storage.latest_network())
+            train_network(config, storage, replay_buffer)
+            save_checkpoints(storage.latest_network())
             t.update(1)
             t.refresh()
 
@@ -288,7 +285,5 @@ def export_models(network: Network):
 
 
 if __name__ == "__main__":
-    ray.init()
     config = make_atari_config()
     muzero(config)
-    ray.shutdown()
