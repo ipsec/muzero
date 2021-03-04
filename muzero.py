@@ -218,33 +218,25 @@ def launch_job(f, *args):
     f(*args)
 
 
-def run_game(config, storage, replay_buffer):
-    count = 0
-    while True:
-        game = play_game(config, storage.latest_network())
-        replay_buffer.save_game(game)
-        write_summary(count, tf.reduce_sum(game.rewards))
-        count += 1
-
 
 def muzero(config: MuZeroConfig):
     storage = SharedStorage(config)
     replay_buffer = ReplayBuffer(config)
 
     with trange(config.episodes) as t:
-        thread_game = Thread(target=run_game, args=(config, storage, replay_buffer))
-        thread_game.start()
-
-        while not replay_buffer.buffer:
-            pass
+        count = 0
 
         for _ in range(config.episodes):
+            game = play_game(config, storage.latest_network())
+            replay_buffer.save_game(game)
+            write_summary(count, tf.reduce_sum(game.rewards))
+            count += 1
             score_mean = np.mean([np.sum(game.rewards) for game in replay_buffer.buffer])
             t.set_description(f"Score Mean: {score_mean:.2f}")
-            train_network(config, storage, replay_buffer)
-            save_checkpoints(storage.latest_network())
             t.update(1)
             t.refresh()
+            train_network(config, storage, replay_buffer)
+            save_checkpoints(storage.latest_network())
 
         export_models(storage.latest_network())
         # write_summary(i, score)
