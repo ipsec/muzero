@@ -3,7 +3,6 @@
 # pylint: disable=unused-argument
 # pylint: disable=missing-docstring
 # pylint: disable=g-explicit-length-test
-import logging
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +14,8 @@ from tensorflow.keras.optimizers import Adam
 # These two parts only communicate by transferring the latest network checkpoint
 # from the training to the self-play, and the finished games from the self-play
 # to the training.
-from tqdm import trange
+# from tqdm import trange
+from tqdm.autonotebook import trange
 
 from config import MuZeroConfig
 from games.game import ReplayBuffer, Game, make_atari_config
@@ -225,10 +225,12 @@ def muzero(config: MuZeroConfig):
         for _ in range(config.episodes):
             for i in range(config.num_games):
                 score = run_selfplay(config, storage, replay_buffer)
-                score_mean = np.mean([np.sum(game.rewards) for game in replay_buffer.buffer])
-                logging.info(f"Score: {score:.2f} - {score_mean:.2f}")
                 #write_summary(count, score)
                 count += 1
+
+            score_mean = np.mean([np.sum(game.rewards) for game in replay_buffer.buffer])
+            t.set_description(f"Score Mean: {score_mean:.2f}")
+
             if len(replay_buffer.buffer) >= config.batch_size:
                 train_network(config, storage, replay_buffer)
                 save_checkpoints(storage.latest_network())
