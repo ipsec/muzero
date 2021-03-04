@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import ray
 import tensorflow as tf
 from tensorflow.keras.optimizers import Adam
 # MuZero training is split into two independent parts: Network training and
@@ -22,6 +23,7 @@ from games.game import ReplayBuffer, Game, make_atari_config
 from mcts import Node, expand_node, backpropagate, add_exploration_noise, run_mcts, select_action
 from models.network import Network
 from storage import SharedStorage
+from summary import write_summary
 from utils import MinMaxStats
 
 
@@ -215,6 +217,11 @@ def scalar_to_support(x, support_size):
 def launch_job(f, *args):
     f(*args)
 
+@ray.remote
+def run_game(config, storage):
+    network = storage.latest_network()
+    return play_game(config, network)
+
 
 def muzero(config: MuZeroConfig):
     storage = SharedStorage(config)
@@ -223,9 +230,14 @@ def muzero(config: MuZeroConfig):
     with trange(config.episodes) as t:
         count = 0
         for _ in range(config.episodes):
+
+            result_ids = []
             for i in range(config.num_games):
-                score = run_selfplay(config, storage, replay_buffer)
-                # write_summary(count, score)
+                result_ids.append(run_game.remote(config, storage))
+
+            for game in ray.get(result_ids):
+                replay_buffer.save_game(game)
+                write_summary(count, tf.reduce_sum(game.rewards))
                 count += 1
 
             score_mean = np.mean([np.sum(game.rewards) for game in replay_buffer.buffer])
@@ -276,5 +288,6 @@ def export_models(network: Network):
 
 
 if __name__ == "__main__":
+    ray.init()
     config = make_atari_config()
     muzero(config)
