@@ -3,11 +3,11 @@
 # pylint: disable=unused-argument
 # pylint: disable=missing-docstring
 # pylint: disable=g-explicit-length-test
+import threading
 from pathlib import Path
 from threading import Thread
 from typing import Any
 
-import numpy as np
 import tensorflow as tf
 from tensorflow.keras.optimizers import Adam
 # MuZero training is split into two independent parts: Network training and
@@ -23,7 +23,7 @@ from games.game import ReplayBuffer, Game, make_atari_config
 from mcts import Node, expand_node, backpropagate, add_exploration_noise, run_mcts, select_action
 from models.network import Network
 from storage import SharedStorage
-from summary import write_summary
+from summary import write_summary_score, write_summary_loss
 from utils import MinMaxStats
 
 
@@ -35,11 +35,10 @@ from utils import MinMaxStats
 # snapshot, produces a game and makes it available to the training job by
 # writing it to a shared replay buffer.
 def run_selfplay(config: MuZeroConfig, storage: SharedStorage, replay_buffer: ReplayBuffer):
-    # while True:
-    network = storage.latest_network()
-    game = play_game(config, network)
-    replay_buffer.save_game(game)
-    return tf.reduce_sum(game.rewards)
+    while True:
+        network = storage.latest_network()
+        game = play_game(config, network)
+        replay_buffer.save_game(game)
 
 
 # Each game is produced by starting at the initial board position, then
@@ -78,16 +77,23 @@ def play_game(config: MuZeroConfig, network: Network) -> Game:
 
 def train_network(config: MuZeroConfig,
                   storage: SharedStorage,
-                  replay_buffer: ReplayBuffer,
-                  optimizer: tf.keras.optimizers.Optimizer = None):
+                  replay_buffer: ReplayBuffer):
     network = storage.latest_network()
+    optimizer = Adam(learning_rate=config.lr_init)
 
-    if not optimizer:
-        optimizer = Adam(learning_rate=0.001)
+    with trange(config.training_steps) as t:
+        for i in range(config.training_steps):
 
-    for _ in range(config.training_steps):
-        batch = replay_buffer.sample_batch(config.num_unroll_steps, config.td_steps)
-        update_weights(optimizer, network, batch, config.weight_decay)
+            if i % config.checkpoint_interval == 0:
+                storage.save_network(network)
+
+            batch = replay_buffer.sample_batch(config.num_unroll_steps, config.td_steps)
+            loss = update_weights(optimizer, network, batch, config.weight_decay)
+            write_summary_loss(loss, i)
+            t.set_description(f"Loss: {loss:.2f}")
+            t.update(1)
+            t.refresh()
+            save_checkpoints(storage.latest_network())
 
     storage.save_network(network)
 
@@ -101,7 +107,6 @@ def update_weights(optimizer: tf.keras.optimizers.Optimizer, network: Network, b
     loss = 0
 
     with tf.GradientTape() as f_tape, tf.GradientTape() as g_tape, tf.GradientTape() as h_tape:
-
         for observations, actions, targets in batch:
             # Initial step, from the real observation.
             network_output = network.initial_inference(observations)
@@ -121,28 +126,26 @@ def update_weights(optimizer: tf.keras.optimizers.Optimizer, network: Network, b
                 target_value, target_reward, target_policy = target
 
                 if target_policy:
-                    policy_loss = tf.nn.softmax_cross_entropy_with_logits(
-                        logits=tf.stack(list(network_output.policy_logits.values())),
-                        labels=tf.convert_to_tensor(target_policy))
-                else:
-                    policy_loss = 0.0
+                    p_logits = tf.stack(list(network_output.policy_logits.values()))
+                    p_labels = tf.convert_to_tensor(target_policy)
+                    policy_loss = tf.nn.softmax_cross_entropy_with_logits(logits=p_logits, labels=p_labels)
 
-                value_loss = scalar_loss(
-                    tf.constant(network_output.value, shape=(1,), dtype=tf.float32),
-                    tf.constant(target_value, shape=(1,), dtype=tf.float32))
-                reward_loss = 0
+                    value_loss = scalar_loss(
+                        tf.constant(network_output.value, shape=(1,), dtype=tf.float32),
+                        tf.constant(target_value, shape=(1,), dtype=tf.float32))
+                    reward_loss = 0
 
-                if k > 0:
-                    reward_loss = scalar_loss(
-                        tf.constant(network_output.reward, shape=(1,), dtype=tf.float32),
-                        tf.constant(target_reward, shape=(1,), dtype=tf.float32))
+                    if k > 0:
+                        reward_loss = scalar_loss(
+                            tf.constant(network_output.reward, shape=(1,), dtype=tf.float32),
+                            tf.constant(target_reward, shape=(1,), dtype=tf.float32))
 
-                loss += scale_gradient((value_loss * 0.25) + policy_loss + reward_loss, gradient_scale)
+                    loss += scale_gradient(value_loss + policy_loss + reward_loss, gradient_scale)
 
         loss /= len(batch)
 
-        for weights in network.get_weights():
-            loss += weight_decay * tf.nn.l2_loss(weights)
+        #for weights in network.get_weights():
+        #    loss += weight_decay * tf.nn.l2_loss(weights)
 
     f_grad = f_tape.gradient(loss, network.f_prediction.trainable_variables)
     g_grad = g_tape.gradient(loss, network.g_dynamics.trainable_variables)
@@ -152,16 +155,17 @@ def update_weights(optimizer: tf.keras.optimizers.Optimizer, network: Network, b
     optimizer.apply_gradients(zip(h_grad, network.h_representation.trainable_variables))
 
     network.increment_training_steps()
+    return loss
 
 
 def scalar_loss(prediction, target):
-    target = tf.math.sign(target) * (tf.math.sqrt(tf.math.abs(target) + 1) - 1) + 0.001 * target
+    # target = tf.math.sign(target) * (tf.math.sqrt(tf.math.abs(target) + 1) - 1) + 0.001 * target
     # target_categorical = tf.keras.utils.to_categorical(target, num_classes=target.shape[0])
-    # return tf.reduce_sum(tf.keras.losses.MSE(y_true=target, y_pred=prediction))
+    return tf.reduce_sum(tf.keras.losses.MSE(y_true=target, y_pred=prediction))
     # return tf.reduce_sum(-target * tf.math.log(prediction))
-    return tf.reduce_mean(
-        tf.nn.softmax_cross_entropy_with_logits(labels=target, logits=prediction)
-    )
+    #return tf.reduce_mean(
+    #    tf.nn.softmax_cross_entropy_with_logits(labels=target, logits=prediction)
+    #)
 
 
 def support_to_scalar(logits, support_size, eps=0.001):
@@ -218,30 +222,20 @@ def launch_job(f, *args):
     f(*args)
 
 
-
 def muzero(config: MuZeroConfig):
     storage = SharedStorage(config)
     replay_buffer = ReplayBuffer(config)
+    network = storage.latest_network()  # create before run games
 
-    with trange(config.episodes) as t:
-        count = 0
+    for _ in range(config.num_actors):
+        thread = Thread(target=run_selfplay, args=(config, storage, replay_buffer))
+        thread.start()
 
-        for _ in range(config.episodes):
-            game = play_game(config, storage.latest_network())
-            replay_buffer.save_game(game)
-            write_summary(count, tf.reduce_sum(game.rewards))
-            count += 1
-            score_mean = np.mean([np.sum(game.rewards) for game in replay_buffer.buffer])
-            t.set_description(f"Score Mean: {score_mean:.2f}")
-            t.update(1)
-            t.refresh()
-            train_network(config, storage, replay_buffer)
-            save_checkpoints(storage.latest_network())
+    while len(replay_buffer.buffer) == 0:
+        pass
 
-        export_models(storage.latest_network())
-        # write_summary(i, score)
-        t.update(1)
-        t.refresh()
+    train_network(config, storage, replay_buffer)
+    export_models(storage.latest_network())
 
 
 def save_checkpoints(network: Network):

@@ -25,7 +25,7 @@ from games.game import ReplayBuffer, Game, make_atari_config
 from mcts import Node, expand_node, backpropagate, add_exploration_noise, run_mcts, select_action
 from models.network import Network
 from storage import SharedStorage
-from summary import write_summary
+from summary import write_summary_score
 from utils import MinMaxStats
 
 
@@ -172,7 +172,7 @@ def muzero(config: MuZeroConfig):
 
         for _ in range(config.episodes):
             reward_mean = np.mean([np.sum(game.rewards) for game in replay_buffer.buffer])
-            write_summary(_, reward_mean)
+            write_summary_score(_, reward_mean)
             train_network(config, storage, replay_buffer)
             save_checkpoints(storage.latest_network())
             t.update(1)

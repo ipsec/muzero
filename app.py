@@ -13,7 +13,7 @@ from games.game import make_atari_config, ReplayBuffer
 from muzero import play_game, train_network, save_checkpoints
 from storage import SharedStorage
 # get root logger
-from summary import write_summary
+from summary import write_summary_score
 
 log = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ async def train():
     while True:
         for _ in range(muzero_config.num_games):
             game = play_game(muzero_config, storage.latest_network())
-            write_summary(count, np.sum(game.rewards))
+            write_summary_score(count, np.sum(game.rewards))
             replay_buffer.save_game(game)
             count += 1
 

@@ -5,6 +5,7 @@ import gym
 import numpy as np
 
 from config import MuZeroConfig
+from summary import write_summary_score
 from utils import Node
 
 
@@ -147,10 +148,14 @@ class ReplayBuffer(object):
         self.window_size = config.window_size
         self.batch_size = config.batch_size
         self.buffer = []
+        self.counter = 0
 
     def save_game(self, game):
         if len(self.buffer) > self.window_size:
             self.buffer.pop(0)
+
+        self.counter += 1
+        write_summary_score(np.sum(game.rewards), self.counter)
         self.buffer.append(game)
 
     def sample_batch(self, num_unroll_steps: int, td_steps: int):
@@ -173,15 +178,7 @@ class ReplayBuffer(object):
 
 def make_atari_config() -> MuZeroConfig:
     def visit_softmax_temperature(config: MuZeroConfig, num_moves, training_steps):
-        temp = 1.0
-
-        if training_steps > config.episodes/2:
-            temp = 0.5
-
-        if training_steps > config.episodes/3:
-            temp = 0.25
-
-        return temp
+        return 1
 
 
     return MuZeroConfig(
@@ -190,13 +187,11 @@ def make_atari_config() -> MuZeroConfig:
         max_moves=500,          # Half an hour at action repeat 4.
         discount=0.997,
         dirichlet_alpha=0.25,
-        num_simulations=15,      # Number of future moves self-simulated
-        batch_size=12,
+        num_simulations=50,      # Number of future moves self-simulated
+        batch_size=64,
         td_steps=10,             # Number of steps in the future to take into account for calculating the target value
-        num_actors=1,
-        num_games=10,
-        training_steps=5,
-        episodes=5000,
-        lr_init=0.001,
+        num_actors=4,
+        training_steps=5000,
+        lr_init=0.05,
         lr_decay_steps=1000,
         visit_softmax_temperature_fn=visit_softmax_temperature)

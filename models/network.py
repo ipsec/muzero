@@ -4,6 +4,7 @@ from typing import Callable, List
 import tensorflow as tf
 from tensorflow.keras.layers import Dense
 from tensorflow.keras.models import Model
+from tensorflow.keras.initializers import Zeros, RandomUniform
 
 from config import MuZeroConfig
 from games.game import Action
@@ -40,9 +41,8 @@ class Dynamics(Model, ABC):
         self.hidden = Dense(neurons, activation=tf.nn.relu)
         self.common = Dense(neurons, activation=tf.nn.relu)
         self.s_k = Dense(hidden_state_size, activation=tf.nn.relu)
-        self.r_k = Dense(1, kernel_initializer=tf.keras.initializers.Zeros)
+        self.r_k = Dense(1, kernel_initializer=Zeros())
 
-    @tf.function
     def call(self, encoded_space, **kwargs):
         """
         :param encoded_space: hidden state concatenated with one_hot action
@@ -67,11 +67,9 @@ class Prediction(Model, ABC):
         self.inputs = Dense(neurons, input_shape=(hidden_state_size,), activation=tf.nn.relu)
         self.hidden = Dense(neurons, activation=tf.nn.relu)
         self.common = Dense(neurons, activation=tf.nn.relu)
-        self.policy = Dense(action_state_size, activation=tf.nn.relu,
-                            kernel_initializer=tf.keras.initializers.RandomUniform)
-        self.value = Dense(1, kernel_initializer=tf.keras.initializers.Zeros)
+        self.policy = Dense(action_state_size, activation=tf.nn.relu, kernel_initializer=RandomUniform())
+        self.value = Dense(1, kernel_initializer=Zeros())
 
-    @tf.function
     def call(self, hidden_state, **kwargs):
         """
         :param hidden_state
@@ -99,7 +97,6 @@ class Representation(Model, ABC):
         self.common = Dense(neurons, activation=tf.nn.relu)
         self.s0 = Dense(observation_space_size, activation=tf.nn.relu)
 
-    @tf.function
     def call(self, observation, **kwargs):
         """
         :param observation
