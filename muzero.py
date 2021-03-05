@@ -30,15 +30,26 @@ from utils import MinMaxStats
 ##################################
 ####### Part 1: Self-Play ########
 
+def run_game(config, network, replay_buffer):
+    game = play_game(config, network)
+    replay_buffer.save_game(game)
+
 
 # Each self-play job is independent of all others; it takes the latest network
 # snapshot, produces a game and makes it available to the training job by
 # writing it to a shared replay buffer.
 def run_selfplay(config: MuZeroConfig, storage: SharedStorage, replay_buffer: ReplayBuffer):
-    while True:
-        network = storage.latest_network()
-        game = play_game(config, network)
-        replay_buffer.save_game(game)
+    network = storage.latest_network()
+
+    threads = []
+    for i in range(config.num_actors):
+        threads.append(Thread(target=run_game, args=(config, network, replay_buffer)))
+
+    for t in threads:
+        t.start()  # Start thread
+
+    for t in threads:
+        t.join()  # Wait all threads finish
 
 
 # Each game is produced by starting at the initial board position, then
@@ -89,7 +100,8 @@ def train_network(config: MuZeroConfig,
 
             batch = replay_buffer.sample_batch(config.num_unroll_steps, config.td_steps)
             loss = update_weights(optimizer, network, batch, config.weight_decay)
-            write_summary_loss(loss, i)
+            write_summary_loss(loss, replay_buffer.loss_counter)
+            replay_buffer.loss_counter += 1
             t.set_description(f"Loss: {loss:.2f}")
             t.update(1)
             t.refresh()
@@ -140,12 +152,12 @@ def update_weights(optimizer: tf.keras.optimizers.Optimizer, network: Network, b
                             tf.constant(network_output.reward, shape=(1,), dtype=tf.float32),
                             tf.constant(target_reward, shape=(1,), dtype=tf.float32))
 
-                    loss += scale_gradient(value_loss + policy_loss + reward_loss, gradient_scale)
+                    loss += scale_gradient((value_loss * 0.25) + policy_loss + reward_loss, gradient_scale)
 
         loss /= len(batch)
 
-        #for weights in network.get_weights():
-        #    loss += weight_decay * tf.nn.l2_loss(weights)
+        for weights in network.get_weights():
+            loss += weight_decay * tf.nn.l2_loss(weights)
 
     f_grad = f_tape.gradient(loss, network.f_prediction.trainable_variables)
     g_grad = g_tape.gradient(loss, network.g_dynamics.trainable_variables)
@@ -160,56 +172,8 @@ def update_weights(optimizer: tf.keras.optimizers.Optimizer, network: Network, b
 
 def scalar_loss(prediction, target):
     # target = tf.math.sign(target) * (tf.math.sqrt(tf.math.abs(target) + 1) - 1) + 0.001 * target
-    # target_categorical = tf.keras.utils.to_categorical(target, num_classes=target.shape[0])
     return tf.reduce_sum(tf.keras.losses.MSE(y_true=target, y_pred=prediction))
-    # return tf.reduce_sum(-target * tf.math.log(prediction))
-    #return tf.reduce_mean(
-    #    tf.nn.softmax_cross_entropy_with_logits(labels=target, logits=prediction)
-    #)
-
-
-def support_to_scalar(logits, support_size, eps=0.001):
-    """
-    Transform a categorical representation to a scalar
-    See paper appendix Network Architecture
-    """
-    # Decode to a scalar
-    probabilities = tf.nn.softmax(logits, axis=1)
-    support = tf.expand_dims(tf.range(-support_size, support_size + 1), axis=0)
-    support = tf.tile(support, [logits.shape[0], 1])  # make batchsize supports
-    # Expectation under softmax
-    x = tf.cast(support, tf.float32) * probabilities
-    x = tf.reduce_sum(x, axis=-1)
-    # Inverse transform h^-1(x) from Lemma A.2.
-    # From "Observe and Look Further: Achieving Consistent Performance on Atari" - Pohlen et al.
-    x = tf.math.sign(x) * (((tf.math.sqrt(1. + 4. * eps * (tf.math.abs(x) + 1 + eps)) - 1) / (2 * eps)) ** 2 - 1)
-    x = tf.expand_dims(x, 1)
-    return x
-
-
-def scalar_to_support(x, support_size):
-    """
-    Transform a scalar to a categorical representation with (2 * support_size + 1) categories
-    See paper appendix Network Architecture
-    """
-    # Reduce the scale (defined in https://arxiv.org/abs/1805.11593)
-    x = tf.math.sign(x) * (tf.math.sqrt(tf.math.abs(x) + 1) - 1) + 0.001 * x
-
-    # Encode on a vector
-    # input (N,1)
-    x = tf.clip_by_value(x, -support_size, support_size)  # 50.3
-    floor = tf.math.floor(x)  # 50
-    prob_upper = x - floor  # 0.3
-    prob_lower = 1 - prob_upper  # 0.7
-    # Needs to become (N,601)
-    dim1_indices = tf.cast(tf.math.floor(x) + support_size, tf.int32)
-    dim0_indices = tf.expand_dims(tf.range(0, x.shape[0]), axis=1)  # this is just 0,1,2,3
-    lower_indices = tf.concat([dim0_indices, dim1_indices], axis=1)
-
-    supports = tf.scatter_nd(lower_indices, tf.squeeze(prob_lower, axis=1), shape=(x.shape[0], 2 * support_size + 1))
-    higher_indices = tf.concat([dim0_indices, tf.clip_by_value(dim1_indices + 1, 0, 2 * support_size)], axis=1)
-    supports = tf.tensor_scatter_nd_add(supports, higher_indices, tf.squeeze(prob_upper, axis=1))
-    return supports
+    #return tf.reduce_sum(-target * tf.math.log(prediction))
 
 
 ######### End Training ###########
@@ -225,17 +189,16 @@ def launch_job(f, *args):
 def muzero(config: MuZeroConfig):
     storage = SharedStorage(config)
     replay_buffer = ReplayBuffer(config)
-    network = storage.latest_network()  # create before run games
 
-    for _ in range(config.num_actors):
-        thread = Thread(target=run_selfplay, args=(config, storage, replay_buffer))
-        thread.start()
-
-    while len(replay_buffer.buffer) == 0:
-        pass
-
-    train_network(config, storage, replay_buffer)
-    export_models(storage.latest_network())
+    with trange(5000) as t:
+        for i in range(5000):
+            run_selfplay(config, storage, replay_buffer)
+            train_network(config, storage, replay_buffer)
+            export_models(storage.latest_network())
+            score_mean = tf.reduce_mean([tf.reduce_sum(game.rewards) for game in replay_buffer.buffer])
+            t.set_description(f"Score Mean: {score_mean:.2f}")
+            t.update(1)
+            t.refresh()
 
 
 def save_checkpoints(network: Network):

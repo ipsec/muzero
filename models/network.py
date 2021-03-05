@@ -43,6 +43,7 @@ class Dynamics(Model, ABC):
         self.s_k = Dense(hidden_state_size, activation=tf.nn.relu)
         self.r_k = Dense(1, kernel_initializer=Zeros())
 
+    @tf.function
     def call(self, encoded_space, **kwargs):
         """
         :param encoded_space: hidden state concatenated with one_hot action
@@ -70,6 +71,7 @@ class Prediction(Model, ABC):
         self.policy = Dense(action_state_size, activation=tf.nn.relu, kernel_initializer=RandomUniform())
         self.value = Dense(1, kernel_initializer=Zeros())
 
+    @tf.function
     def call(self, hidden_state, **kwargs):
         """
         :param hidden_state
@@ -97,6 +99,7 @@ class Representation(Model, ABC):
         self.common = Dense(neurons, activation=tf.nn.relu)
         self.s0 = Dense(observation_space_size, activation=tf.nn.relu)
 
+    @tf.function
     def call(self, observation, **kwargs):
         """
         :param observation

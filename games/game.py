@@ -149,6 +149,7 @@ class ReplayBuffer(object):
         self.batch_size = config.batch_size
         self.buffer = []
         self.counter = 0
+        self.loss_counter = 0
 
     def save_game(self, game):
         if len(self.buffer) > self.window_size:
@@ -188,10 +189,10 @@ def make_atari_config() -> MuZeroConfig:
         discount=0.997,
         dirichlet_alpha=0.25,
         num_simulations=50,      # Number of future moves self-simulated
-        batch_size=64,
+        batch_size=1024,
         td_steps=10,             # Number of steps in the future to take into account for calculating the target value
         num_actors=4,
-        training_steps=5000,
+        training_steps=1,
         lr_init=0.05,
         lr_decay_steps=1000,
         visit_softmax_temperature_fn=visit_softmax_temperature)
