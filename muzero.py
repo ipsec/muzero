@@ -39,17 +39,18 @@ def run_game(config, network, replay_buffer):
 # snapshot, produces a game and makes it available to the training job by
 # writing it to a shared replay buffer.
 def run_selfplay(config: MuZeroConfig, storage: SharedStorage, replay_buffer: ReplayBuffer):
-    network = storage.latest_network()
+    while True:
+        network = storage.latest_network()
 
-    threads = []
-    for i in range(config.num_actors):
-        threads.append(Thread(target=run_game, args=(config, network, replay_buffer)))
+        threads = []
+        for i in range(config.num_actors):
+            threads.append(Thread(target=run_game, args=(config, network, replay_buffer)))
 
-    for t in threads:
-        t.start()  # Start thread
+        for t in threads:
+            t.start()  # Start thread
 
-    for t in threads:
-        t.join()  # Wait all threads finish
+        for t in threads:
+            t.join()  # Wait all threads finish
 
 
 # Each game is produced by starting at the initial board position, then
@@ -90,7 +91,12 @@ def train_network(config: MuZeroConfig,
                   storage: SharedStorage,
                   replay_buffer: ReplayBuffer):
     network = storage.latest_network()
-    optimizer = Adam(learning_rate=config.lr_init)
+
+    # Learning rate very high. It's right?
+    learning_rate = config.lr_init * config.lr_decay_rate ** (
+            replay_buffer.loss_counter / config.lr_decay_steps)
+
+    optimizer = Adam(learning_rate=learning_rate)
 
     with trange(config.training_steps) as t:
         for i in range(config.training_steps):
@@ -100,8 +106,10 @@ def train_network(config: MuZeroConfig,
 
             batch = replay_buffer.sample_batch(config.num_unroll_steps, config.td_steps)
             loss = update_weights(optimizer, network, batch, config.weight_decay)
+
             write_summary_loss(loss, replay_buffer.loss_counter)
             replay_buffer.loss_counter += 1
+
             t.set_description(f"Loss: {loss:.2f}")
             t.update(1)
             t.refresh()
@@ -190,9 +198,14 @@ def muzero(config: MuZeroConfig):
     storage = SharedStorage(config)
     replay_buffer = ReplayBuffer(config)
 
+    thread_games = Thread(target=run_selfplay, args=(config, storage, replay_buffer))
+    thread_games.start()
+
+    while len(replay_buffer.buffer) == 0:
+        pass
+
     with trange(5000) as t:
         for i in range(5000):
-            run_selfplay(config, storage, replay_buffer)
             train_network(config, storage, replay_buffer)
             export_models(storage.latest_network())
             score_mean = tf.reduce_mean([tf.reduce_sum(game.rewards) for game in replay_buffer.buffer])
