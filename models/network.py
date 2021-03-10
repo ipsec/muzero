@@ -9,6 +9,7 @@ from tensorflow.keras.initializers import Zeros, RandomUniform
 from config import MuZeroConfig
 from games.game import Action
 from models import NetworkOutput
+from utils import support_to_scalar
 
 """
 g = dynamics
@@ -29,48 +30,6 @@ def scale(t: tf.Tensor):
     return (t - tf.reduce_min(t)) / (tf.reduce_max(t) - tf.reduce_min(t))
 
 
-def support_to_scalar(logits: tf.Tensor, support_size: int = 20, eps: float = 0.001):
-    """
-    Transform a categorical representation to a scalar
-    See paper appendix Network Architecture
-    """
-    # Decode to a scalar
-    probabilities = tf.nn.softmax(logits, axis=1)
-    support = tf.expand_dims(tf.range(-support_size, support_size + 1), axis=0)
-    support = tf.tile(support, [logits.shape[0], 1])  # make batchsize supports
-    # Expectation under softmax
-    x = tf.cast(support, tf.float32) * probabilities
-    x = tf.reduce_sum(x, axis=-1)
-    # Inverse transform h^-1(x) from Lemma A.2.
-    # From "Observe and Look Further: Achieving Consistent Performance on Atari" - Pohlen et al.
-    x = tf.math.sign(x) * (((tf.math.sqrt(1. + 4. * eps * (tf.math.abs(x) + 1 + eps)) - 1) / (2 * eps)) ** 2 - 1)
-    x = tf.expand_dims(x, 1)
-    return x
-
-
-def scalar_to_support(x: tf.Tensor, support_size: int = 20):
-    x = tf.math.sign(x) * (tf.math.sqrt(tf.math.abs(x) + 1) - 1) + 0.001 * x
-    x = tf.clip_by_value(x, -support_size, support_size)
-    floor = tf.floor(x)
-    prob = x - floor
-    # logits = tf.zeros((x.shape[0], x.shape[1], 2 * support_size + 1))
-    indices = tf.cast(tf.squeeze(floor + support_size), dtype=tf.int32)
-    indices = tf.stack([tf.range(x.shape[1]), indices], axis=1)
-    updates = tf.squeeze(1 - prob)
-
-    indexes = floor + support_size + 1
-    prob = tf.where(2 * support_size < indexes, 0.0, prob)
-    indexes = tf.where(2 * support_size < indexes, 0.0, indexes)
-    indexes = tf.squeeze(tf.cast(indexes, dtype=tf.int32))
-    indexes = tf.stack([tf.range(x.shape[1]), indexes], axis=1)
-
-    idx = tf.concat([indices, indexes], axis=0)
-    prob = tf.squeeze(prob)
-    all_updates = tf.concat([updates, prob], axis=0)
-
-    return tf.scatter_nd(idx, all_updates, (x.shape[1], 2 * support_size + 1))
-
-
 class Dynamics(Model, ABC):
     def __init__(self, hidden_state_size: int, encoded_space_size: int):
         """
@@ -79,11 +38,12 @@ class Dynamics(Model, ABC):
         """
         super(Dynamics, self).__init__()
         neurons = 32
+        self.support = 300
         self.inputs = Dense(neurons, input_shape=(encoded_space_size,), activation=tf.nn.relu)
         self.hidden = Dense(neurons, activation=tf.nn.relu)
         self.common = Dense(neurons, activation=tf.nn.relu)
         self.s_k = Dense(hidden_state_size, activation=tf.nn.relu)
-        self.r_k = Dense(41, kernel_initializer=Zeros(), activation=tf.nn.tanh)
+        self.r_k = Dense(self.support * 2 + 1, activation=tf.nn.softmax)
 
     @tf.function
     def call(self, encoded_space, **kwargs):
@@ -96,7 +56,7 @@ class Dynamics(Model, ABC):
         x = self.common(x)
         s_k = self.s_k(x)
         r_k = self.r_k(x)
-        return s_k, support_to_scalar(r_k)
+        return s_k, support_to_scalar(r_k, self.support)
 
 
 class Prediction(Model, ABC):
@@ -107,11 +67,12 @@ class Prediction(Model, ABC):
         """
         super(Prediction, self).__init__()
         neurons = 32
+        self.support = 300
         self.inputs = Dense(neurons, input_shape=(hidden_state_size,), activation=tf.nn.relu)
         self.hidden = Dense(neurons, activation=tf.nn.relu)
         self.common = Dense(neurons, activation=tf.nn.relu)
-        self.policy = Dense(action_state_size, activation=tf.nn.tanh, kernel_initializer='uniform')
-        self.value = Dense(41, kernel_initializer=Zeros(), activation=tf.nn.tanh)
+        self.policy = Dense(action_state_size, activation=tf.nn.sigmoid)
+        self.value = Dense(self.support * 2 + 1, activation=tf.nn.softmax)
 
     @tf.function
     def call(self, hidden_state, **kwargs):
@@ -125,7 +86,7 @@ class Prediction(Model, ABC):
         policy = self.policy(x)
         value = self.value(x)
 
-        return policy, support_to_scalar(value)
+        return policy, support_to_scalar(value, self.support)
 
 
 class Representation(Model, ABC):

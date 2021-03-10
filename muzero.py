@@ -3,14 +3,11 @@
 # pylint: disable=unused-argument
 # pylint: disable=missing-docstring
 # pylint: disable=g-explicit-length-test
-import threading
 from pathlib import Path
-from threading import Thread
 from typing import Any
 
 import tensorflow as tf
 from tensorflow.keras.optimizers import Adam
-from tensorflow.keras.optimizers.schedules import ExponentialDecay
 # MuZero training is split into two independent parts: Network training and
 # self-play data generation.
 # These two parts only communicate by transferring the latest network checkpoint
@@ -24,34 +21,20 @@ from games.game import ReplayBuffer, Game, make_atari_config
 from mcts import Node, expand_node, backpropagate, add_exploration_noise, run_mcts, select_action
 from models.network import Network
 from storage import SharedStorage
-from summary import write_summary_score, write_summary_loss
-from utils import MinMaxStats
+from summary import write_summary_loss
+from utils import MinMaxStats, scalar_to_support
 
 
 ##################################
 ####### Part 1: Self-Play ########
 
-def run_game(config, network, replay_buffer):
-    game = play_game(config, network)
-    replay_buffer.save_game(game)
-
-
 # Each self-play job is independent of all others; it takes the latest network
 # snapshot, produces a game and makes it available to the training job by
 # writing it to a shared replay buffer.
 def run_selfplay(config: MuZeroConfig, storage: SharedStorage, replay_buffer: ReplayBuffer):
-    while True:
-        network = storage.latest_network()
-
-        threads = []
-        for i in range(config.num_actors):
-            threads.append(Thread(target=run_game, args=(config, network, replay_buffer)))
-
-        for t in threads:
-            t.start()  # Start thread
-
-        for t in threads:
-            t.join()  # Wait all threads finish
+    network = storage.latest_network()
+    game = play_game(config, network)
+    replay_buffer.save_game(game)
 
 
 # Each game is produced by starting at the initial board position, then
@@ -105,10 +88,10 @@ def train_network(config: MuZeroConfig,
             batch = replay_buffer.sample_batch(config.num_unroll_steps, config.td_steps)
             loss = update_weights(optimizer, network, batch, config.weight_decay)
 
-            write_summary_loss(loss, replay_buffer.loss_counter)
+            write_summary_loss(float(loss), replay_buffer.loss_counter)
             replay_buffer.loss_counter += 1
 
-            t.set_description(f"Loss: {loss:.2f}")
+            t.set_description(f"Loss: {float(loss):.2f}")
             t.update(1)
             t.refresh()
             save_checkpoints(storage.latest_network())
@@ -149,14 +132,14 @@ def update_weights(optimizer: tf.keras.optimizers.Optimizer, network: Network, b
                     policy_loss = tf.nn.softmax_cross_entropy_with_logits(logits=p_logits, labels=p_labels)
 
                     value_loss = scalar_loss(
-                        tf.constant(network_output.value, shape=(1,), dtype=tf.float32),
-                        tf.constant(target_value, shape=(1,), dtype=tf.float32))
+                        tf.constant(network_output.value, shape=(1, 1), dtype=tf.float32),
+                        tf.constant(target_value, shape=(1, 1), dtype=tf.float32))
                     reward_loss = 0
 
                     if k > 0:
                         reward_loss = scalar_loss(
-                            tf.constant(network_output.reward, shape=(1,), dtype=tf.float32),
-                            tf.constant(target_reward, shape=(1,), dtype=tf.float32))
+                            tf.constant(network_output.reward, shape=(1, 1), dtype=tf.float32),
+                            tf.constant(target_reward, shape=(1, 1), dtype=tf.float32))
 
                     loss += scale_gradient((value_loss * 0.25) + policy_loss + reward_loss, gradient_scale)
 
@@ -177,7 +160,9 @@ def update_weights(optimizer: tf.keras.optimizers.Optimizer, network: Network, b
 
 
 def scalar_loss(prediction, target):
-    return tf.reduce_sum(-target * tf.math.log_softmax(prediction))
+    target = scalar_to_support(target, 300)
+    prediction = scalar_to_support(prediction, 300)
+    return tf.losses.categorical_crossentropy(target, prediction)
     # target = tf.math.sign(target) * (tf.math.sqrt(tf.math.abs(target) + 1) - 1) + 0.001 * target
     # return tf.reduce_sum(tf.keras.losses.MSE(y_true=target, y_pred=prediction))
     # return tf.reduce_sum(-target * tf.math.log(prediction))
@@ -198,14 +183,10 @@ def muzero(config: MuZeroConfig):
     storage = SharedStorage(config)
     replay_buffer = ReplayBuffer(config)
 
-    thread_games = Thread(target=run_selfplay, args=(config, storage, replay_buffer))
-    thread_games.start()
-
-    while len(replay_buffer.buffer) == 0:
-        pass
-
     with trange(5000) as t:
         for i in range(5000):
+            for _ in range(config.num_actors):
+                run_selfplay(config, storage, replay_buffer)
             train_network(config, storage, replay_buffer)
             export_models(storage.latest_network())
             score_mean = tf.reduce_mean([tf.reduce_sum(game.rewards) for game in replay_buffer.buffer])
@@ -219,7 +200,6 @@ def save_checkpoints(network: Network):
         for model in network.get_networks():
             Path.mkdir(Path(f'./checkpoints/{model.__class__.__name__}'), parents=True, exist_ok=True)
             model.save_weights(f'./checkpoints/{model.__class__.__name__}/checkpoint')
-            # print(f"Model {model.__class__.__name__} Saved!")
     except Exception as e:
         print(f"Unable to save networks. {e}")
 

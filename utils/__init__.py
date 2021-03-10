@@ -1,5 +1,9 @@
+import tensorflow as tf
+import numpy as np
 from dataclasses import dataclass
 from typing import Optional
+
+import typing
 
 MAXIMUM_FLOAT_VALUE = float('inf')
 
@@ -49,3 +53,82 @@ class Node(object):
         if self.visit_count == 0:
             return 0
         return self.value_sum / self.visit_count
+
+
+def cast_to_tensor(x: typing.Union[np.ndarray, float]) -> tf.Tensor:
+    """ Wrapper function to cast numpy arrays to tensorflow Tensors with keras float default. """
+    return tf.convert_to_tensor(x, dtype=tf.keras.backend.floatx())
+
+
+def atari_reward_transform(x: tf.Tensor, eps: float = 0.001) -> tf.Tensor:
+    """
+    Scalar transformation of rewards to stabilize variance and reduce scale.
+    :references: https://arxiv.org/pdf/1805.11593.pdf
+    """
+    return tf.math.sign(x) * (tf.math.sqrt(tf.math.abs(x) + 1) - 1) + tf.constant(eps) * x
+
+
+def inverse_atari_reward_transform(x: tf.Tensor, eps: float = 0.001) -> tf.Tensor:
+    """
+    Inverse scalar transformation of atari_reward_transform function as used in the canonical MuZero paper.
+    :references: https://arxiv.org/pdf/1805.11593.pdf
+    """
+    return tf.math.sign(x) * (((tf.math.sqrt(1. + 4. * eps * (tf.math.abs(x) + 1 + eps)) - 1) / (2 * eps)) ** 2 - 1)
+
+
+def support_to_scalar(x: tf.Tensor, support_size: int,
+                      inv_reward_transformer: typing.Callable = inverse_atari_reward_transform, **kwargs) -> tf.Tensor:
+    """
+    Recast distributional representation of floats back to floats. As the bins are symmetrically oriented around 0,
+    this is simply done by taking a dot-product of the vector that represents the bins' integer range with the
+    probability bins. After recasting of the floats, the floats are inverse-transformed for the scaling function.
+    :param x: np.ndarray 2D-array of floats in distributional representation: len(scalars) x (support_size * 2 + 1)
+    :param support_size:
+    :param inv_reward_transformer: Inverse of the elementwise function that scales floats before casting them to bins.
+    :param kwargs: Keyword arguments for inv_reward_transformer.
+    :return: np.ndarray of size len(scalars) x 1
+    """
+    if support_size == 0:  # Simple regression (support in this case can be the mean of a Gaussian)
+        return x
+
+    bins = tf.range(-support_size, support_size + 1, dtype=tf.float32)
+    y = tf.tensordot(tf.squeeze(x), tf.squeeze(bins), 1)
+
+    value = inv_reward_transformer(y, **kwargs)
+
+    return value
+
+
+def scalar_to_support(x: tf.Tensor, support_size: int,
+                      reward_transformer: typing.Callable = atari_reward_transform, **kwargs) -> tf.Tensor:
+    """
+    Cast a scalar or array of scalars to a distributional representation symmetric around 0.
+    For example, the float 3.4 given a support size of 5 will create 11 bins for integers [-5, ..., 5].
+    Each bin is assigned a probability value of 0, bins 4 and 3 will receive probabilities .4 and .6 respectively.
+    :param x: np.ndarray 1D-array of floats to be cast to distributional bins.
+    :param support_size: int Number of bins indicating integer range symmetric around zero.
+    :param reward_transformer: Elementwise function to scale floats before casting them to bins.
+    :param kwargs: Keyword arguments for reward_transformer.
+    :return: np.ndarray of size len(x) x (support_size * 2 + 1)
+    """
+    if support_size == 0:  # Simple regression (support in this case can be the mean of a Gaussian)
+        return x
+
+    transformed = tf.clip_by_value(reward_transformer(x, **kwargs), -support_size, support_size - 1e-8)
+    floored = tf.floor(transformed)  # Lower-bound support integer
+    prob = transformed - floored                 # Proportion between adjacent integers
+
+    bins = tf.zeros((len(x), 2 * support_size + 1))
+
+    idx_0 = tf.expand_dims(tf.cast(tf.squeeze(floored + support_size), dtype=tf.int32), -1)
+    idx_1 = tf.expand_dims(tf.cast(tf.squeeze(floored + support_size + 1), dtype=tf.int32), -1)
+    idx_0 = tf.stack([tf.range(x.shape[1]), idx_0])
+    idx_1 = tf.stack([tf.range(x.shape[1]), idx_1])
+    idxs = tf.squeeze(tf.stack([idx_0, idx_1]))
+
+    update_0 = tf.constant(1 - prob)
+    update_1 = tf.constant(prob)
+
+    updates = tf.squeeze(tf.concat([update_0, update_1], axis=0))
+
+    return tf.scatter_nd(idxs, updates, (1,2 * support_size + 1))
