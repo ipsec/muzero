@@ -75,11 +75,13 @@ def play_game(config: MuZeroConfig, network: Network) -> Game:
 
 def train_network(config: MuZeroConfig,
                   storage: SharedStorage,
-                  replay_buffer: ReplayBuffer):
+                  replay_buffer: ReplayBuffer,
+                  optimizer: tf.keras.optimizers.Optimizer = None):
     network = storage.latest_network()
     #lr_schedule = ExponentialDecay(initial_learning_rate=config.lr_init, decay_steps=10, decay_rate=0.9)
     #optimizer = Adam(learning_rate=lr_schedule)
-    optimizer = Adam(learning_rate=0.05)
+    if not optimizer:
+        optimizer = Adam(learning_rate=0.05)
 
     for i in range(config.training_steps):
 
@@ -179,11 +181,17 @@ def launch_job(f, *args):
 def muzero(config: MuZeroConfig):
     storage = SharedStorage(config)
     replay_buffer = ReplayBuffer(config)
+    lr_schedule = ExponentialDecay(
+        initial_learning_rate=config.lr_init,
+        decay_steps=config.lr_decay_steps,
+        decay_rate=config.lr_decay_rate
+    )
+    optimizer = Adam(learning_rate=lr_schedule)
 
     with trange(5000) as t:
         for i in range(5000):
             run_selfplay(config, storage, replay_buffer)
-            train_network(config, storage, replay_buffer)
+            train_network(config, storage, replay_buffer, optimizer)
             export_models(storage.latest_network())
             score_mean = tf.reduce_mean([tf.reduce_sum(game.rewards) for game in replay_buffer.buffer])
             t.set_description(f"Score Mean: {score_mean:.2f}")

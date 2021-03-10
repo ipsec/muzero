@@ -17,6 +17,7 @@ class MuZeroConfig(object):
                  num_actors: int,
                  lr_init: float,
                  lr_decay_steps: float,
+                 lr_decay_rate: float,
                  visit_softmax_temperature_fn,
                  training_steps: int = int(1000e3),
                  known_bounds: Optional[KnownBounds] = None):
@@ -58,5 +59,5 @@ class MuZeroConfig(object):
 
         # Exponential learning rate schedule
         self.lr_init = lr_init
-        self.lr_decay_rate = 0.1
+        self.lr_decay_rate = lr_decay_rate
         self.lr_decay_steps = lr_decay_steps
