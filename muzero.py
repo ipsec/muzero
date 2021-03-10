@@ -4,6 +4,7 @@
 # pylint: disable=missing-docstring
 # pylint: disable=g-explicit-length-test
 from pathlib import Path
+from threading import Thread
 from typing import Any
 
 import tensorflow as tf
@@ -14,6 +15,7 @@ from tensorflow.keras.optimizers import Adam
 # from the training to the self-play, and the finished games from the self-play
 # to the training.
 # from tqdm import trange
+from tensorflow.python.keras.optimizer_v2.learning_rate_schedule import ExponentialDecay
 from tqdm.autonotebook import trange
 
 from config import MuZeroConfig
@@ -21,7 +23,7 @@ from games.game import ReplayBuffer, Game, make_atari_config
 from mcts import Node, expand_node, backpropagate, add_exploration_noise, run_mcts, select_action
 from models.network import Network
 from storage import SharedStorage
-from summary import write_summary_loss
+from summary import write_summary_loss, write_summary_score
 from utils import MinMaxStats, scalar_to_support
 
 
@@ -75,26 +77,22 @@ def train_network(config: MuZeroConfig,
                   storage: SharedStorage,
                   replay_buffer: ReplayBuffer):
     network = storage.latest_network()
-    # lr_schedule = ExponentialDecay(initial_learning_rate=config.lr_init, decay_steps=10, decay_rate=0.9)
-    # optimizer = Adam(learning_rate=lr_schedule)
-    optimizer = Adam(learning_rate=0.01)
+    #lr_schedule = ExponentialDecay(initial_learning_rate=config.lr_init, decay_steps=10, decay_rate=0.9)
+    #optimizer = Adam(learning_rate=lr_schedule)
+    optimizer = Adam(learning_rate=0.05)
 
-    with trange(config.training_steps) as t:
-        for i in range(config.training_steps):
+    for i in range(config.training_steps):
 
-            if i % config.checkpoint_interval == 0:
-                storage.save_network(network)
+        if i % config.checkpoint_interval == 0:
+            storage.save_network(network)
 
-            batch = replay_buffer.sample_batch(config.num_unroll_steps, config.td_steps)
-            loss = update_weights(optimizer, network, batch, config.weight_decay)
+        batch = replay_buffer.sample_batch(config.num_unroll_steps, config.td_steps)
+        loss = update_weights(optimizer, network, batch, config.weight_decay)
 
-            write_summary_loss(float(loss), replay_buffer.loss_counter)
-            replay_buffer.loss_counter += 1
+        write_summary_loss(float(loss), replay_buffer.loss_counter)
+        replay_buffer.loss_counter += 1
 
-            t.set_description(f"Loss: {float(loss):.2f}")
-            t.update(1)
-            t.refresh()
-            save_checkpoints(storage.latest_network())
+        save_checkpoints(storage.latest_network())
 
     storage.save_network(network)
 
@@ -160,8 +158,8 @@ def update_weights(optimizer: tf.keras.optimizers.Optimizer, network: Network, b
 
 
 def scalar_loss(prediction, target):
-    target = scalar_to_support(target, 300)
-    prediction = scalar_to_support(prediction, 300)
+    target = scalar_to_support(target, 20)
+    prediction = scalar_to_support(prediction, 20)
     return tf.losses.categorical_crossentropy(target, prediction)
     # target = tf.math.sign(target) * (tf.math.sqrt(tf.math.abs(target) + 1) - 1) + 0.001 * target
     # return tf.reduce_sum(tf.keras.losses.MSE(y_true=target, y_pred=prediction))
@@ -185,8 +183,7 @@ def muzero(config: MuZeroConfig):
 
     with trange(5000) as t:
         for i in range(5000):
-            for _ in range(config.num_actors):
-                run_selfplay(config, storage, replay_buffer)
+            run_selfplay(config, storage, replay_buffer)
             train_network(config, storage, replay_buffer)
             export_models(storage.latest_network())
             score_mean = tf.reduce_mean([tf.reduce_sum(game.rewards) for game in replay_buffer.buffer])
