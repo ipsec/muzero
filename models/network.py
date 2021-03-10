@@ -38,7 +38,7 @@ class Dynamics(Model, ABC):
         """
         super(Dynamics, self).__init__()
         neurons = 32
-        self.support = 20
+        self.support = 300
         self.inputs = Dense(neurons, input_shape=(encoded_space_size,), activation=tf.nn.relu)
         self.hidden = Dense(neurons, activation=tf.nn.relu)
         self.common = Dense(neurons, activation=tf.nn.relu)
@@ -67,7 +67,7 @@ class Prediction(Model, ABC):
         """
         super(Prediction, self).__init__()
         neurons = 32
-        self.support = 20
+        self.support = 300
         self.inputs = Dense(neurons, input_shape=(hidden_state_size,), activation=tf.nn.relu)
         self.hidden = Dense(neurons, activation=tf.nn.relu)
         self.common = Dense(neurons, activation=tf.nn.relu)

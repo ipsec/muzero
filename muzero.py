@@ -158,8 +158,8 @@ def update_weights(optimizer: tf.keras.optimizers.Optimizer, network: Network, b
 
 
 def scalar_loss(prediction, target):
-    target = scalar_to_support(target, 20)
-    prediction = scalar_to_support(prediction, 20)
+    target = scalar_to_support(target, 300)
+    prediction = scalar_to_support(prediction, 300)
     return tf.losses.categorical_crossentropy(target, prediction)
     # target = tf.math.sign(target) * (tf.math.sqrt(tf.math.abs(target) + 1) - 1) + 0.001 * target
     # return tf.reduce_sum(tf.keras.losses.MSE(y_true=target, y_pred=prediction))
