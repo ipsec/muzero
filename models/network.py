@@ -4,7 +4,6 @@ from typing import Callable, List
 import tensorflow as tf
 from tensorflow.keras.layers import Dense
 from tensorflow.keras.models import Model
-from tensorflow.keras.initializers import Zeros, RandomUniform
 
 from config import MuZeroConfig
 from games.game import Action
@@ -38,12 +37,12 @@ class Dynamics(Model, ABC):
         """
         super(Dynamics, self).__init__()
         neurons = 32
-        self.support = 300
+        self.support = 20
         self.inputs = Dense(neurons, input_shape=(encoded_space_size,), activation=tf.nn.relu)
         self.hidden = Dense(neurons, activation=tf.nn.relu)
         self.common = Dense(neurons, activation=tf.nn.relu)
         self.s_k = Dense(hidden_state_size, activation=tf.nn.relu)
-        self.r_k = Dense(self.support * 2 + 1, activation=tf.nn.softmax)
+        self.r_k = Dense(self.support * 2 + 1, activation=tf.nn.tanh)
 
     @tf.function
     def call(self, encoded_space, **kwargs):
@@ -56,7 +55,8 @@ class Dynamics(Model, ABC):
         x = self.common(x)
         s_k = self.s_k(x)
         r_k = self.r_k(x)
-        return s_k, support_to_scalar(r_k, self.support)
+        #return s_k, support_to_scalar(r_k, self.support)
+        return s_k, r_k
 
 
 class Prediction(Model, ABC):
@@ -67,12 +67,12 @@ class Prediction(Model, ABC):
         """
         super(Prediction, self).__init__()
         neurons = 32
-        self.support = 300
+        self.support = 20
         self.inputs = Dense(neurons, input_shape=(hidden_state_size,), activation=tf.nn.relu)
         self.hidden = Dense(neurons, activation=tf.nn.relu)
         self.common = Dense(neurons, activation=tf.nn.relu)
-        self.policy = Dense(action_state_size, activation=tf.nn.sigmoid)
-        self.value = Dense(self.support * 2 + 1, activation=tf.nn.softmax)
+        self.policy = Dense(action_state_size, activation=tf.nn.softmax)
+        self.value = Dense(self.support * 2 + 1, activation=tf.nn.tanh)
 
     @tf.function
     def call(self, hidden_state, **kwargs):
@@ -86,7 +86,8 @@ class Prediction(Model, ABC):
         policy = self.policy(x)
         value = self.value(x)
 
-        return policy, support_to_scalar(value, self.support)
+        #return policy, support_to_scalar(value, self.support)
+        return policy, value
 
 
 class Representation(Model, ABC):
@@ -135,7 +136,7 @@ class Network(object):
         p, v = self.f_prediction(s_0)
 
         return NetworkOutput(
-            value=v,
+            value=float(support_to_scalar(v, 20)),
             reward=0.0,
             policy_logits=NetworkOutput.build_policy_logits(policy_logits=p),
             hidden_state=s_0,
@@ -154,8 +155,8 @@ class Network(object):
         p, v = self.f_prediction(s_k)
 
         return NetworkOutput(
-            value=v,
-            reward=r_k,
+            value=float(support_to_scalar(v, 20)),
+            reward=float(support_to_scalar(r_k, 20)),
             policy_logits=NetworkOutput.build_policy_logits(policy_logits=p),
             hidden_state=s_k
         )

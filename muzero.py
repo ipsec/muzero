@@ -6,7 +6,7 @@
 from pathlib import Path
 from threading import Thread
 from typing import Any
-
+import numpy as np
 import tensorflow as tf
 from tensorflow.keras.optimizers import Adam
 # MuZero training is split into two independent parts: Network training and
@@ -129,15 +129,11 @@ def update_weights(optimizer: tf.keras.optimizers.Optimizer, network: Network, b
                     p_labels = tf.convert_to_tensor(target_policy)
                     policy_loss = tf.nn.softmax_cross_entropy_with_logits(logits=p_logits, labels=p_labels)
 
-                    value_loss = scalar_loss(
-                        tf.constant(network_output.value, shape=(1, 1), dtype=tf.float32),
-                        tf.constant(target_value, shape=(1, 1), dtype=tf.float32))
-                    reward_loss = 0
+                    value_loss = scalar_loss(network_output.value, target_value)
+                    reward_loss = 0.0
 
                     if k > 0:
-                        reward_loss = scalar_loss(
-                            tf.constant(network_output.reward, shape=(1, 1), dtype=tf.float32),
-                            tf.constant(target_reward, shape=(1, 1), dtype=tf.float32))
+                        reward_loss = scalar_loss(network_output.reward, target_reward)
 
                     loss += scale_gradient((value_loss * 0.25) + policy_loss + reward_loss, gradient_scale)
 
@@ -158,9 +154,12 @@ def update_weights(optimizer: tf.keras.optimizers.Optimizer, network: Network, b
 
 
 def scalar_loss(prediction, target):
-    target = scalar_to_support(target, 300)
-    prediction = scalar_to_support(prediction, 300)
-    return tf.losses.categorical_crossentropy(target, prediction)
+    target = tf.constant(target, dtype=tf.float32, shape=(1,))
+    prediction = tf.constant(prediction, dtype=tf.float32, shape=(1,))
+
+    target = scalar_to_support(np.array([float(target)]), 20)
+    prediction = scalar_to_support(np.array([float(prediction)]), 20)
+    return tf.cast(tf.losses.categorical_crossentropy(target, prediction), dtype=tf.float32)
     # target = tf.math.sign(target) * (tf.math.sqrt(tf.math.abs(target) + 1) - 1) + 0.001 * target
     # return tf.reduce_sum(tf.keras.losses.MSE(y_true=target, y_pred=prediction))
     # return tf.reduce_sum(-target * tf.math.log(prediction))
@@ -218,7 +217,7 @@ def export_models(network: Network):
             path = Path(f'./data/saved_model/{model.__class__.__name__}')
             Path.mkdir(path, parents=True, exist_ok=True)
             tf.saved_model.save(model, str(path.absolute()))
-            print(f"Model {model.__class__.__name__} Saved!")
+            #print(f"Model {model.__class__.__name__} Saved!")
     except Exception as e:
         print(f"Unable to save networks. {e}")
 
