@@ -38,8 +38,11 @@ class Dynamics(Model, ABC):
         super(Dynamics, self).__init__()
         neurons = 32
         self.support = 20
-        self.inputs = Dense(neurons, input_shape=(encoded_space_size,), activation=tf.nn.relu)
-        self.hidden = Dense(neurons, activation=tf.nn.relu)
+        self.inputs = Dense(neurons, input_shape=(encoded_space_size,),
+                            activation=tf.nn.relu,
+                            kernel_regularizer=tf.keras.regularizers.l2(0.001))
+        self.hidden = Dense(neurons, activation=tf.nn.relu,
+                            kernel_regularizer=tf.keras.regularizers.l2(0.001))
         self.common = Dense(neurons, activation=tf.nn.relu)
         self.s_k = Dense(hidden_state_size, activation=tf.nn.relu)
         self.r_k = Dense(self.support * 2 + 1, activation=tf.nn.tanh)
@@ -66,10 +69,14 @@ class Prediction(Model, ABC):
         :param action_state_size: size of action state
         """
         super(Prediction, self).__init__()
-        neurons = 32
+        neurons = 64
         self.support = 20
-        self.inputs = Dense(neurons, input_shape=(hidden_state_size,), activation=tf.nn.relu)
-        self.hidden = Dense(neurons, activation=tf.nn.relu)
+        self.inputs = Dense(neurons, input_shape=(hidden_state_size,),
+                            activation=tf.nn.relu,
+                            kernel_regularizer=tf.keras.regularizers.l2(0.001))
+        self.hidden = Dense(neurons,
+                            activation=tf.nn.relu,
+                            kernel_regularizer=tf.keras.regularizers.l2(0.001))
         self.common = Dense(neurons, activation=tf.nn.relu)
         self.policy = Dense(action_state_size, activation=tf.nn.softmax)
         self.value = Dense(self.support * 2 + 1, activation=tf.nn.tanh)
@@ -98,8 +105,11 @@ class Representation(Model, ABC):
         """
         super(Representation, self).__init__()
         neurons = 32
-        self.inputs = Dense(neurons, input_shape=(observation_space_size,), activation=tf.nn.relu)
-        self.hidden = Dense(neurons, activation=tf.nn.relu)
+        self.inputs = Dense(neurons, input_shape=(observation_space_size,),
+                            activation=tf.nn.relu,
+                            kernel_regularizer=tf.keras.regularizers.l2(0.001))
+        self.hidden = Dense(neurons, activation=tf.nn.relu,
+                            kernel_regularizer=tf.keras.regularizers.l2(0.001))
         self.common = Dense(neurons, activation=tf.nn.relu)
         self.s0 = Dense(observation_space_size, activation=tf.nn.relu)
 
@@ -129,7 +139,7 @@ class Network(object):
 
         # representation
         observation = tf.expand_dims(observation, 0)
-        # observation = scale(observation)      # Scale only hidden states or observations too?
+        observation = scale(observation)
         s_0 = self.h_representation(observation)
 
         # prediction

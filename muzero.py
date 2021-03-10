@@ -186,7 +186,7 @@ def muzero(config: MuZeroConfig):
         decay_steps=config.lr_decay_steps,
         decay_rate=config.lr_decay_rate
     )
-    optimizer = Adam(learning_rate=lr_schedule)
+    optimizer = Adam(learning_rate=lr_schedule, clipvalue=1.0)
 
     with trange(5000) as t:
         for i in range(5000):
