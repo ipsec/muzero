@@ -225,4 +225,5 @@ def export_models(network: Network):
 
 if __name__ == "__main__":
     config = make_atari_config()
-    muzero(config)
+    with tf.device('/device:GPU:0'):
+        muzero(config)
