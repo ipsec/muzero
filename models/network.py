@@ -29,6 +29,48 @@ def scale(t: tf.Tensor):
     return (t - tf.reduce_min(t)) / (tf.reduce_max(t) - tf.reduce_min(t))
 
 
+def support_to_scalar(logits: tf.Tensor, support_size: int = 20, eps: float = 0.001):
+    """
+    Transform a categorical representation to a scalar
+    See paper appendix Network Architecture
+    """
+    # Decode to a scalar
+    probabilities = tf.nn.softmax(logits, axis=1)
+    support = tf.expand_dims(tf.range(-support_size, support_size + 1), axis=0)
+    support = tf.tile(support, [logits.shape[0], 1])  # make batchsize supports
+    # Expectation under softmax
+    x = tf.cast(support, tf.float32) * probabilities
+    x = tf.reduce_sum(x, axis=-1)
+    # Inverse transform h^-1(x) from Lemma A.2.
+    # From "Observe and Look Further: Achieving Consistent Performance on Atari" - Pohlen et al.
+    x = tf.math.sign(x) * (((tf.math.sqrt(1. + 4. * eps * (tf.math.abs(x) + 1 + eps)) - 1) / (2 * eps)) ** 2 - 1)
+    x = tf.expand_dims(x, 1)
+    return x
+
+
+def scalar_to_support(x: tf.Tensor, support_size: int = 20):
+    x = tf.math.sign(x) * (tf.math.sqrt(tf.math.abs(x) + 1) - 1) + 0.001 * x
+    x = tf.clip_by_value(x, -support_size, support_size)
+    floor = tf.floor(x)
+    prob = x - floor
+    # logits = tf.zeros((x.shape[0], x.shape[1], 2 * support_size + 1))
+    indices = tf.cast(tf.squeeze(floor + support_size), dtype=tf.int32)
+    indices = tf.stack([tf.range(x.shape[1]), indices], axis=1)
+    updates = tf.squeeze(1 - prob)
+
+    indexes = floor + support_size + 1
+    prob = tf.where(2 * support_size < indexes, 0.0, prob)
+    indexes = tf.where(2 * support_size < indexes, 0.0, indexes)
+    indexes = tf.squeeze(tf.cast(indexes, dtype=tf.int32))
+    indexes = tf.stack([tf.range(x.shape[1]), indexes], axis=1)
+
+    idx = tf.concat([indices, indexes], axis=0)
+    prob = tf.squeeze(prob)
+    all_updates = tf.concat([updates, prob], axis=0)
+
+    return tf.scatter_nd(idx, all_updates, (x.shape[1], 2 * support_size + 1))
+
+
 class Dynamics(Model, ABC):
     def __init__(self, hidden_state_size: int, encoded_space_size: int):
         """
@@ -41,7 +83,7 @@ class Dynamics(Model, ABC):
         self.hidden = Dense(neurons, activation=tf.nn.relu)
         self.common = Dense(neurons, activation=tf.nn.relu)
         self.s_k = Dense(hidden_state_size, activation=tf.nn.relu)
-        self.r_k = Dense(1, kernel_initializer=Zeros())
+        self.r_k = Dense(41, kernel_initializer=Zeros(), activation=tf.nn.tanh)
 
     @tf.function
     def call(self, encoded_space, **kwargs):
@@ -54,7 +96,7 @@ class Dynamics(Model, ABC):
         x = self.common(x)
         s_k = self.s_k(x)
         r_k = self.r_k(x)
-        return scale(s_k), r_k
+        return s_k, support_to_scalar(r_k)
 
 
 class Prediction(Model, ABC):
@@ -68,8 +110,8 @@ class Prediction(Model, ABC):
         self.inputs = Dense(neurons, input_shape=(hidden_state_size,), activation=tf.nn.relu)
         self.hidden = Dense(neurons, activation=tf.nn.relu)
         self.common = Dense(neurons, activation=tf.nn.relu)
-        self.policy = Dense(action_state_size, activation=tf.nn.relu, kernel_initializer=RandomUniform())
-        self.value = Dense(1, kernel_initializer=Zeros())
+        self.policy = Dense(action_state_size, activation=tf.nn.tanh, kernel_initializer='uniform')
+        self.value = Dense(41, kernel_initializer=Zeros(), activation=tf.nn.tanh)
 
     @tf.function
     def call(self, hidden_state, **kwargs):
@@ -83,7 +125,7 @@ class Prediction(Model, ABC):
         policy = self.policy(x)
         value = self.value(x)
 
-        return scale(policy), value
+        return policy, support_to_scalar(value)
 
 
 class Representation(Model, ABC):
@@ -105,12 +147,11 @@ class Representation(Model, ABC):
         :param observation
         :return: state s0
         """
-        observation = tf.expand_dims(observation, 0)
         x = self.inputs(observation)
         x = self.hidden(x)
         x = self.common(x)
         s_0 = self.s0(x)
-        return scale(s_0)
+        return s_0
 
 
 class Network(object):
@@ -125,14 +166,16 @@ class Network(object):
         # representation + prediction function
 
         # representation
+        observation = tf.expand_dims(observation, 0)
+        # observation = scale(observation)      # Scale only hidden states or observations too?
         s_0 = self.h_representation(observation)
 
         # prediction
         p, v = self.f_prediction(s_0)
 
         return NetworkOutput(
-            value=float(v),
-            reward=float(0.0),
+            value=v,
+            reward=0.0,
             policy_logits=NetworkOutput.build_policy_logits(policy_logits=p),
             hidden_state=s_0,
         )
@@ -142,6 +185,7 @@ class Network(object):
 
         # dynamics (encoded_state)
         one_hot = tf.expand_dims(tf.one_hot(action.index, self.config.action_space_size), 0)
+        hidden_state = scale(hidden_state)
         encoded_state = tf.concat([hidden_state, one_hot], axis=1)
         s_k, r_k = self.g_dynamics(encoded_state)
 
@@ -149,8 +193,8 @@ class Network(object):
         p, v = self.f_prediction(s_k)
 
         return NetworkOutput(
-            value=float(v),
-            reward=float(r_k),
+            value=v,
+            reward=r_k,
             policy_logits=NetworkOutput.build_policy_logits(policy_logits=p),
             hidden_state=s_k
         )

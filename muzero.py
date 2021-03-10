@@ -10,6 +10,7 @@ from typing import Any
 
 import tensorflow as tf
 from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.optimizers.schedules import ExponentialDecay
 # MuZero training is split into two independent parts: Network training and
 # self-play data generation.
 # These two parts only communicate by transferring the latest network checkpoint
@@ -91,12 +92,9 @@ def train_network(config: MuZeroConfig,
                   storage: SharedStorage,
                   replay_buffer: ReplayBuffer):
     network = storage.latest_network()
-
-    # Learning rate very high. It's right?
-    learning_rate = config.lr_init * config.lr_decay_rate ** (
-            replay_buffer.loss_counter / config.lr_decay_steps)
-
-    optimizer = Adam(learning_rate=learning_rate)
+    # lr_schedule = ExponentialDecay(initial_learning_rate=config.lr_init, decay_steps=10, decay_rate=0.9)
+    # optimizer = Adam(learning_rate=lr_schedule)
+    optimizer = Adam(learning_rate=0.01)
 
     with trange(config.training_steps) as t:
         for i in range(config.training_steps):
@@ -179,9 +177,11 @@ def update_weights(optimizer: tf.keras.optimizers.Optimizer, network: Network, b
 
 
 def scalar_loss(prediction, target):
+    return tf.reduce_sum(-target * tf.math.log_softmax(prediction))
     # target = tf.math.sign(target) * (tf.math.sqrt(tf.math.abs(target) + 1) - 1) + 0.001 * target
-    return tf.reduce_sum(tf.keras.losses.MSE(y_true=target, y_pred=prediction))
-    #return tf.reduce_sum(-target * tf.math.log(prediction))
+    # return tf.reduce_sum(tf.keras.losses.MSE(y_true=target, y_pred=prediction))
+    # return tf.reduce_sum(-target * tf.math.log(prediction))
+    # return tf.reduce_sum(tf.nn.softmax_cross_entropy_with_logits(target, prediction))
 
 
 ######### End Training ###########

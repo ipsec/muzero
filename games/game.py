@@ -66,7 +66,7 @@ class Game(object):
 
     def __init__(self, action_space_size: int, discount: float):
         self.env = gym.make('LunarLander-v2')
-        #self.env = gym.make('CartPole-v1')
+        # self.env = gym.make('CartPole-v1')
         self.states = [self.env.reset()]
         self.history = []
         self.rewards = []
@@ -169,30 +169,29 @@ class ReplayBuffer(object):
     def sample_game(self) -> Game:
         # Sample game from buffer either uniformly or according to some priority.
         return random.choice(self.buffer)
-        #return np.random.choice(self.buffer)
+        # return np.random.choice(self.buffer)
 
     def sample_position(self, game) -> int:
         # Sample position from game either uniformly or according to some priority.
         return random.randrange(len(game.history))
-        #return np.random.choice(len(game.history))
+        # return np.random.choice(len(game.history))
 
 
 def make_atari_config() -> MuZeroConfig:
     def visit_softmax_temperature(config: MuZeroConfig, num_moves, training_steps):
         return 1
 
-
     return MuZeroConfig(
         state_space_size=8,
         action_space_size=4,
-        max_moves=500,          # Half an hour at action repeat 4.
+        max_moves=500,  # Half an hour at action repeat 4.
         discount=0.997,
         dirichlet_alpha=0.25,
-        num_simulations=50,      # Number of future moves self-simulated
-        batch_size=2048,
-        td_steps=10,             # Number of steps in the future to take into account for calculating the target value
+        num_simulations=50,  # Number of future moves self-simulated
+        batch_size=64,
+        td_steps=10,  # Number of steps in the future to take into account for calculating the target value
         num_actors=4,
-        training_steps=100,
+        training_steps=1000,
         lr_init=0.05,
         lr_decay_steps=100,
         visit_softmax_temperature_fn=visit_softmax_temperature)
