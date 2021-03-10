@@ -171,10 +171,7 @@ def scalar_to_support(x: np.ndarray, support_size: int,
 
     bins = np.zeros((len(x), 2 * support_size + 1))
 
-    try:
-        bins[np.arange(len(x)), floored + support_size] = 1 - prob
-        bins[np.arange(len(x)), floored + support_size + 1] = prob
-    except IndexError as e:
-        print(e)
+    bins[np.arange(len(x)), floored + support_size] = 1 - prob
+    bins[np.arange(len(x)), floored + support_size + 1] = prob
 
     return bins

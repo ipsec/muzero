@@ -37,6 +37,7 @@ def run_selfplay(config: MuZeroConfig, storage: SharedStorage, replay_buffer: Re
     network = storage.latest_network()
     game = play_game(config, network)
     replay_buffer.save_game(game)
+    return tf.reduce_sum(game.rewards)
 
 
 # Each game is produced by starting at the initial board position, then
@@ -164,7 +165,7 @@ def scalar_loss(prediction, target):
     return tf.cast(tf.losses.categorical_crossentropy(target, prediction), dtype=tf.float32)
     # target = tf.math.sign(target) * (tf.math.sqrt(tf.math.abs(target) + 1) - 1) + 0.001 * target
     # return tf.reduce_sum(tf.keras.losses.MSE(y_true=target, y_pred=prediction))
-    # return tf.reduce_sum(-target * tf.math.log(prediction))
+    #return tf.reduce_sum(-target * tf.nn.log_softmax(prediction))
     # return tf.reduce_sum(tf.nn.softmax_cross_entropy_with_logits(target, prediction))
 
 
@@ -186,15 +187,20 @@ def muzero(config: MuZeroConfig):
         decay_steps=config.lr_decay_steps,
         decay_rate=config.lr_decay_rate
     )
-    optimizer = Adam(learning_rate=lr_schedule, clipvalue=1.0)
+    #optimizer = Adam(learning_rate=lr_schedule, clipnorm=1)
+    optimizer = Adam(learning_rate=0.001, clipnorm=1)
 
     with trange(5000) as t:
         for i in range(5000):
-            run_selfplay(config, storage, replay_buffer)
-            train_network(config, storage, replay_buffer, optimizer)
+            for _ in range(config.training_steps):
+                score = run_selfplay(config, storage, replay_buffer)
+
+            for _ in range(config.training_steps):
+                train_network(config, storage, replay_buffer, optimizer)
+
             export_models(storage.latest_network())
             score_mean = tf.reduce_mean([tf.reduce_sum(game.rewards) for game in replay_buffer.buffer])
-            t.set_description(f"Score Mean: {score_mean:.2f}")
+            t.set_description(f"Last Score: {score:.2f} - Mean: {score_mean:.2f}")
             t.update(1)
             t.refresh()
 
@@ -231,6 +237,6 @@ def export_models(network: Network):
 
 
 if __name__ == "__main__":
-    config = make_atari_config()
     with tf.device('/device:GPU:0'):
+        config = make_atari_config()
         muzero(config)
