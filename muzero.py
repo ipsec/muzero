@@ -34,10 +34,10 @@ from utils import MinMaxStats, scalar_to_support
 # snapshot, produces a game and makes it available to the training job by
 # writing it to a shared replay buffer.
 def run_selfplay(config: MuZeroConfig, storage: SharedStorage, replay_buffer: ReplayBuffer):
-    network = storage.latest_network()
-    game = play_game(config, network)
-    replay_buffer.save_game(game)
-    return tf.reduce_sum(game.rewards)
+    while True:
+        network = storage.latest_network()
+        game = play_game(config, network)
+        replay_buffer.save_game(game)
 
 
 # Each game is produced by starting at the initial board position, then
@@ -79,8 +79,6 @@ def train_network(config: MuZeroConfig,
                   replay_buffer: ReplayBuffer,
                   optimizer: tf.keras.optimizers.Optimizer = None):
     network = storage.latest_network()
-    #lr_schedule = ExponentialDecay(initial_learning_rate=config.lr_init, decay_steps=10, decay_rate=0.9)
-    #optimizer = Adam(learning_rate=lr_schedule)
     if not optimizer:
         optimizer = Adam(learning_rate=0.05)
 
@@ -126,7 +124,6 @@ def update_weights(optimizer: tf.keras.optimizers.Optimizer, network: Network, b
             for k, (prediction, target) in enumerate(zip(predictions, targets)):
                 gradient_scale, network_output = prediction
                 target_value, target_reward, target_policy = target
-
                 if target_policy:
                     p_logits = tf.stack(list(network_output.policy_logits.values()))
                     p_labels = tf.convert_to_tensor(target_policy)
@@ -162,7 +159,8 @@ def scalar_loss(prediction, target):
 
     target = scalar_to_support(np.array([float(target)]), 20)
     prediction = scalar_to_support(np.array([float(prediction)]), 20)
-    return tf.cast(tf.losses.categorical_crossentropy(target, prediction), dtype=tf.float32)
+    #return tf.cast(tf.losses.categorical_crossentropy(target, prediction), dtype=tf.float32)
+    return tf.cast(tf.nn.softmax_cross_entropy_with_logits(logits=prediction, labels=target), dtype=tf.float32)
     # target = tf.math.sign(target) * (tf.math.sqrt(tf.math.abs(target) + 1) - 1) + 0.001 * target
     # return tf.reduce_sum(tf.keras.losses.MSE(y_true=target, y_pred=prediction))
     #return tf.reduce_sum(-target * tf.nn.log_softmax(prediction))
@@ -187,20 +185,20 @@ def muzero(config: MuZeroConfig):
         decay_steps=config.lr_decay_steps,
         decay_rate=config.lr_decay_rate
     )
-    #optimizer = Adam(learning_rate=lr_schedule, clipnorm=1)
-    optimizer = Adam(learning_rate=0.001, clipnorm=1)
+    optimizer = Adam(learning_rate=lr_schedule)
 
-    with trange(5000) as t:
-        for i in range(5000):
-            for _ in range(config.training_steps):
-                score = run_selfplay(config, storage, replay_buffer)
+    t = Thread(target=run_selfplay, args=(config, storage, replay_buffer))
+    t.start()
 
-            for _ in range(config.training_steps):
-                train_network(config, storage, replay_buffer, optimizer)
+    while len(replay_buffer.buffer) == 0:
+        pass
 
+    with trange(config.epochs) as t:
+        for i in range(config.epochs):
+            train_network(config, storage, replay_buffer, optimizer)
             export_models(storage.latest_network())
             score_mean = tf.reduce_mean([tf.reduce_sum(game.rewards) for game in replay_buffer.buffer])
-            t.set_description(f"Last Score: {score:.2f} - Mean: {score_mean:.2f}")
+            t.set_description(f"Mean: {score_mean:.2f}")
             t.update(1)
             t.refresh()
 

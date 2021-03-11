@@ -19,7 +19,7 @@ class MuZeroConfig(object):
                  lr_decay_steps: float,
                  lr_decay_rate: float,
                  visit_softmax_temperature_fn,
-                 training_steps: int = int(1000e3),
+                 training_steps: int = 5000,
                  known_bounds: Optional[KnownBounds] = None):
 
         # Self-Play
@@ -48,6 +48,7 @@ class MuZeroConfig(object):
 
         # Training
         self.training_steps = training_steps
+        self.epochs = 5000
         self.checkpoint_interval = 10
         self.window_size = 10000
         self.batch_size = batch_size

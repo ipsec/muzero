@@ -114,8 +114,7 @@ def add_exploration_noise(config: MuZeroConfig, node: Node):
 def softmax_sample(distribution, temperature: float):
     # helper function to sample an index from a probability array
     d = [x for x, y in distribution]
-    d = np.array(d) ** (1 / temperature)
-    p_sum = d.sum()
-    sample_temp = d / p_sum
-    action = np.argmax(np.random.multinomial(1, sample_temp, 1))
+    counts_exp = np.exp(d) * (1 / temperature)
+    probs = counts_exp / np.sum(counts_exp, axis=0)
+    action = np.random.choice(len(distribution), p=probs)
     return distribution[action][1]

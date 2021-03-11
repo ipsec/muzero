@@ -1,9 +1,8 @@
-import tensorflow as tf
-import numpy as np
+import typing
 from dataclasses import dataclass
 from typing import Optional
 
-import typing
+import numpy as np
 
 MAXIMUM_FLOAT_VALUE = float('inf')
 
@@ -175,3 +174,25 @@ def scalar_to_support(x: np.ndarray, support_size: int,
     bins[np.arange(len(x)), floored + support_size + 1] = prob
 
     return bins
+
+
+def _value_transform(value_support: np.array) -> float:
+    """
+    The value is obtained by first computing the expected value from the discrete support.
+    Second, the inverse transform is then apply (the square function).
+    """
+
+    value = _softmax(value_support)
+    value = np.dot(value, range(2 * 20 + 1))
+    value = np.asscalar(value) ** 2
+    return value
+
+
+def _reward_transform(reward: np.array) -> float:
+    return np.asscalar(reward)
+
+
+def _softmax(values):
+    """Compute softmax using numerical stability tricks."""
+    values_exp = np.exp(values - np.max(values))
+    return values_exp / np.sum(values_exp)
