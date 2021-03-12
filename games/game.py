@@ -168,13 +168,13 @@ class ReplayBuffer(object):
 
     def sample_game(self) -> Game:
         # Sample game from buffer either uniformly or according to some priority.
-        return random.choice(self.buffer)
-        # return np.random.choice(self.buffer)
+        # return random.choice(self.buffer)
+        return np.random.choice(self.buffer)
 
     def sample_position(self, game) -> int:
         # Sample position from game either uniformly or according to some priority.
-        return random.randrange(len(game.history))
-        # return np.random.choice(len(game.history))
+        # return random.randrange(len(game.history))
+        return np.random.choice(len(game.history))
 
 
 def make_atari_config() -> MuZeroConfig:
@@ -196,7 +196,7 @@ def make_atari_config() -> MuZeroConfig:
         batch_size=128,
         td_steps=10,  # Number of steps in the future to take into account for calculating the target value
         num_actors=1,
-        training_steps=1,
+        training_steps=5000,
         lr_init=0.05,
         lr_decay_steps=100,
         lr_decay_rate=0.96,

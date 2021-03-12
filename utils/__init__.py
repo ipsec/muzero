@@ -184,12 +184,12 @@ def _value_transform(value_support: np.array) -> float:
 
     value = _softmax(value_support)
     value = np.dot(value, range(2 * 20 + 1))
-    value = np.asscalar(value) ** 2
+    value = np.ndarray.item(value) ** 2
     return value
 
 
 def _reward_transform(reward: np.array) -> float:
-    return np.asscalar(reward)
+    return np.ndarray.item(reward)
 
 
 def _softmax(values):

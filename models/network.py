@@ -9,7 +9,7 @@ from tensorflow.keras.models import Model
 from config import MuZeroConfig
 from games.game import Action
 from models import NetworkOutput
-from utils import support_to_scalar, _value_transform, _reward_transform
+from utils import support_to_scalar
 
 
 def scale(t: tf.Tensor):
@@ -48,7 +48,7 @@ class Dynamics(Model, ABC):
         self.r_common = Dense(neurons,
                               activation=tf.nn.relu,
                               kernel_regularizer=self.regularizer)
-        self.r_k = Dense(1, kernel_regularizer=self.regularizer)
+        self.r_k = Dense(self.support * 2 + 1, activation=tf.nn.softmax, kernel_regularizer=self.regularizer)
 
     @tf.function
     def call(self, encoded_space, **kwargs):
@@ -100,7 +100,7 @@ class Prediction(Model, ABC):
         self.v_common = Dense(neurons,
                               activation=tf.nn.relu,
                               kernel_regularizer=self.regularizer)
-        self.value = Dense(self.support * 2 + 1, kernel_regularizer=self.regularizer)
+        self.value = Dense(self.support * 2 + 1, activation=tf.nn.softmax, kernel_regularizer=self.regularizer)
 
     @tf.function
     def call(self, hidden_state, **kwargs):
@@ -175,7 +175,7 @@ class Network(object):
         p, v = self.f_prediction(s_0)
 
         return NetworkOutput(
-            value=_value_transform(v),
+            value=float(support_to_scalar(tf.squeeze(v).numpy(), 20)),
             reward=tf.constant([[0.0]]),
             policy_logits=NetworkOutput.build_policy_logits(policy_logits=p),
             hidden_state=s_0,
@@ -186,17 +186,15 @@ class Network(object):
 
         # dynamics (encoded_state)
         one_hot = tf.expand_dims(tf.one_hot(action.index, self.config.action_space_size), 0)
-        hidden_state = scale(hidden_state)
         encoded_state = tf.concat([hidden_state, one_hot], axis=1)
-        #encoded_state = scale(encoded_state)
         s_k, r_k = self.g_dynamics(encoded_state)
 
         # prediction
         p, v = self.f_prediction(s_k)
 
         return NetworkOutput(
-            value=_value_transform(v),
-            reward=_reward_transform(r_k.numpy()),
+            value=float(support_to_scalar(tf.squeeze(v).numpy(), 20)),
+            reward=float(support_to_scalar(tf.squeeze(r_k).numpy(), 20)),
             policy_logits=NetworkOutput.build_policy_logits(policy_logits=p),
             hidden_state=s_k
         )

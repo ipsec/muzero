@@ -76,26 +76,23 @@ def play_game(config: MuZeroConfig, network: Network) -> Game:
 
 def train_network(config: MuZeroConfig,
                   storage: SharedStorage,
-                  replay_buffer: ReplayBuffer,
-                  optimizer: tf.keras.optimizers.Optimizer = None):
-    network = storage.latest_network()
-    if not optimizer:
-        optimizer = Adam(learning_rate=0.05)
+                  replay_buffer: ReplayBuffer):
+    network = Network(config)
+    lr_schedule = ExponentialDecay(
+        initial_learning_rate=config.lr_init,
+        decay_steps=config.lr_decay_steps,
+        decay_rate=config.lr_decay_rate
+    )
+    optimizer = Adam(learning_rate=lr_schedule)
 
     for i in range(config.training_steps):
-
         if i % config.checkpoint_interval == 0:
-            storage.save_network(network)
-
+            storage.save_network(i, network)
+            save_checkpoints(storage.latest_network())
         batch = replay_buffer.sample_batch(config.num_unroll_steps, config.td_steps)
-        loss = update_weights(optimizer, network, batch, config.weight_decay)
+        update_weights(optimizer, network, batch, config.weight_decay)
 
-        write_summary_loss(float(loss), replay_buffer.loss_counter)
-        replay_buffer.loss_counter += 1
-
-        save_checkpoints(storage.latest_network())
-
-    storage.save_network(network)
+    storage.save_network(config.training_steps, network)
 
 
 def scale_gradient(tensor: Any, scale):
@@ -104,9 +101,8 @@ def scale_gradient(tensor: Any, scale):
 
 
 def update_weights(optimizer: tf.keras.optimizers.Optimizer, network: Network, batch, weight_decay: float):
-    loss = 0
-
-    with tf.GradientTape() as f_tape, tf.GradientTape() as g_tape, tf.GradientTape() as h_tape:
+    def loss():
+        loss = 0
         for observations, actions, targets in batch:
             # Initial step, from the real observation.
             network_output = network.initial_inference(observations)
@@ -138,19 +134,10 @@ def update_weights(optimizer: tf.keras.optimizers.Optimizer, network: Network, b
                     loss += scale_gradient((value_loss * 0.25) + policy_loss + reward_loss, gradient_scale)
 
         loss /= len(batch)
+        return loss
 
-        for weights in network.get_weights():
-            loss += weight_decay * tf.nn.l2_loss(weights)
-
-    f_grad = f_tape.gradient(loss, network.f_prediction.trainable_variables)
-    g_grad = g_tape.gradient(loss, network.g_dynamics.trainable_variables)
-    h_grad = h_tape.gradient(loss, network.h_representation.trainable_variables)
-    optimizer.apply_gradients(zip(f_grad, network.f_prediction.trainable_variables))
-    optimizer.apply_gradients(zip(g_grad, network.g_dynamics.trainable_variables))
-    optimizer.apply_gradients(zip(h_grad, network.h_representation.trainable_variables))
-
+    optimizer.minimize(loss=loss, var_list=network.cb_get_variables())
     network.increment_training_steps()
-    return loss
 
 
 def scalar_loss(prediction, target):
@@ -159,11 +146,11 @@ def scalar_loss(prediction, target):
 
     target = scalar_to_support(np.array([float(target)]), 20)
     prediction = scalar_to_support(np.array([float(prediction)]), 20)
-    #return tf.cast(tf.losses.categorical_crossentropy(target, prediction), dtype=tf.float32)
+    # return tf.cast(tf.losses.categorical_crossentropy(target, prediction), dtype=tf.float32)
     return tf.cast(tf.nn.softmax_cross_entropy_with_logits(logits=prediction, labels=target), dtype=tf.float32)
     # target = tf.math.sign(target) * (tf.math.sqrt(tf.math.abs(target) + 1) - 1) + 0.001 * target
     # return tf.reduce_sum(tf.keras.losses.MSE(y_true=target, y_pred=prediction))
-    #return tf.reduce_sum(-target * tf.nn.log_softmax(prediction))
+    # return tf.reduce_sum(-target * tf.nn.log_softmax(prediction))
     # return tf.reduce_sum(tf.nn.softmax_cross_entropy_with_logits(target, prediction))
 
 
@@ -180,12 +167,6 @@ def launch_job(f, *args):
 def muzero(config: MuZeroConfig):
     storage = SharedStorage(config)
     replay_buffer = ReplayBuffer(config)
-    lr_schedule = ExponentialDecay(
-        initial_learning_rate=config.lr_init,
-        decay_steps=config.lr_decay_steps,
-        decay_rate=config.lr_decay_rate
-    )
-    optimizer = Adam(learning_rate=lr_schedule)
 
     t = Thread(target=run_selfplay, args=(config, storage, replay_buffer))
     t.start()
@@ -193,14 +174,8 @@ def muzero(config: MuZeroConfig):
     while len(replay_buffer.buffer) == 0:
         pass
 
-    with trange(config.epochs) as t:
-        for i in range(config.epochs):
-            train_network(config, storage, replay_buffer, optimizer)
-            export_models(storage.latest_network())
-            score_mean = tf.reduce_mean([tf.reduce_sum(game.rewards) for game in replay_buffer.buffer])
-            t.set_description(f"Mean: {score_mean:.2f}")
-            t.update(1)
-            t.refresh()
+    train_network(config, storage, replay_buffer)
+    export_models(storage.latest_network())
 
 
 def save_checkpoints(network: Network):
@@ -229,7 +204,7 @@ def export_models(network: Network):
             path = Path(f'./data/saved_model/{model.__class__.__name__}')
             Path.mkdir(path, parents=True, exist_ok=True)
             tf.saved_model.save(model, str(path.absolute()))
-            #print(f"Model {model.__class__.__name__} Saved!")
+            # print(f"Model {model.__class__.__name__} Saved!")
     except Exception as e:
         print(f"Unable to save networks. {e}")
 
