@@ -3,9 +3,9 @@
 # pylint: disable=unused-argument
 # pylint: disable=missing-docstring
 # pylint: disable=g-explicit-length-test
-from pathlib import Path
 from threading import Thread
 from typing import Any
+
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras.optimizers import Adam
@@ -16,14 +16,12 @@ from tensorflow.keras.optimizers import Adam
 # to the training.
 # from tqdm import trange
 from tensorflow.python.keras.optimizer_v2.learning_rate_schedule import ExponentialDecay
-from tqdm.autonotebook import trange
 
 from config import MuZeroConfig
 from games.game import ReplayBuffer, Game, make_atari_config
 from mcts import Node, expand_node, backpropagate, add_exploration_noise, run_mcts, select_action
 from models.network import Network
 from storage import SharedStorage
-from summary import write_summary_loss, write_summary_score
 from utils import MinMaxStats, scalar_to_support
 
 
@@ -33,6 +31,9 @@ from utils import MinMaxStats, scalar_to_support
 # Each self-play job is independent of all others; it takes the latest network
 # snapshot, produces a game and makes it available to the training job by
 # writing it to a shared replay buffer.
+from utils.exports import save_checkpoints, export_models
+
+
 def run_selfplay(config: MuZeroConfig, storage: SharedStorage, replay_buffer: ReplayBuffer):
     while True:
         network = storage.latest_network()
@@ -176,37 +177,6 @@ def muzero(config: MuZeroConfig):
 
     train_network(config, storage, replay_buffer)
     export_models(storage.latest_network())
-
-
-def save_checkpoints(network: Network):
-    try:
-        for model in network.get_networks():
-            Path.mkdir(Path(f'./checkpoints/{model.__class__.__name__}'), parents=True, exist_ok=True)
-            model.save_weights(f'./checkpoints/{model.__class__.__name__}/checkpoint')
-    except Exception as e:
-        print(f"Unable to save networks. {e}")
-
-
-def load_checkpoints(network: Network):
-    try:
-        for model in network.get_networks():
-            path = Path(f'./checkpoints/{model.__class__.__name__}/checkpoint')
-            if Path.exists(path):
-                model.load_weights(path)
-                print(f"Load weights with success.")
-    except Exception as e:
-        print(f"Unable to load networks. {e}")
-
-
-def export_models(network: Network):
-    try:
-        for model in network.get_networks():
-            path = Path(f'./data/saved_model/{model.__class__.__name__}')
-            Path.mkdir(path, parents=True, exist_ok=True)
-            tf.saved_model.save(model, str(path.absolute()))
-            # print(f"Model {model.__class__.__name__} Saved!")
-    except Exception as e:
-        print(f"Unable to save networks. {e}")
 
 
 if __name__ == "__main__":

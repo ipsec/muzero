@@ -113,8 +113,8 @@ def add_exploration_noise(config: MuZeroConfig, node: Node):
 # Stubs to make the typechecker happy.
 def softmax_sample(distribution, temperature: float):
     # helper function to sample an index from a probability array
-    d = [x for x, y in distribution]
-    counts_exp = np.exp(d) * (1 / temperature)
-    probs = counts_exp / np.sum(counts_exp, axis=0)
-    action = np.random.choice(len(distribution), p=probs)
+    d = np.asarray([x for x, y in distribution])
+    counts = d ** (1 / temperature)
+    probs = counts / sum(counts)
+    action = np.random.choice(len(counts), p=probs)
     return distribution[action][1]
