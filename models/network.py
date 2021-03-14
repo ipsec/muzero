@@ -23,7 +23,7 @@ class Dynamics(Model, ABC):
         :param encoded_space_size: size of hidden state
         """
         super(Dynamics, self).__init__()
-        neurons = 64
+        neurons = 20
         self.support = 20
         self.regularizer = regularizers.l2(1e-4)
         self.s_inputs = Dense(neurons,
@@ -36,7 +36,7 @@ class Dynamics(Model, ABC):
         self.s_common = Dense(neurons,
                               activation=tf.nn.relu,
                               kernel_regularizer=self.regularizer)
-        self.s_k = Dense(hidden_state_size, activation=tf.nn.tanh, kernel_regularizer=self.regularizer)
+        self.s_k = Dense(hidden_state_size, activation=tf.nn.relu, kernel_regularizer=self.regularizer)
 
         self.r_inputs = Dense(neurons,
                               input_shape=(encoded_space_size,),
@@ -75,7 +75,7 @@ class Prediction(Model, ABC):
         :param action_state_size: size of action state
         """
         super(Prediction, self).__init__()
-        neurons = 64
+        neurons = 20
         self.support = 20
         self.regularizer = regularizers.l2(1e-4)
         self.p_inputs = Dense(neurons,
@@ -128,7 +128,7 @@ class Representation(Model, ABC):
         :param observation_space_size
         """
         super(Representation, self).__init__()
-        neurons = 64
+        neurons = 20
         self.regularizer = regularizers.l2(1e-4)
         self.inputs = Dense(neurons,
                             input_shape=(observation_space_size,),
@@ -140,7 +140,7 @@ class Representation(Model, ABC):
         self.common = Dense(neurons,
                             activation=tf.nn.relu,
                             kernel_regularizer=self.regularizer)
-        self.s0 = Dense(observation_space_size, activation=tf.nn.tanh, kernel_regularizer=self.regularizer)
+        self.s0 = Dense(observation_space_size, activation=tf.nn.relu, kernel_regularizer=self.regularizer)
 
     @tf.function
     def call(self, observation, **kwargs):
@@ -222,6 +222,9 @@ class Network(object):
     def training_steps(self) -> int:
         # How many steps / batches the network has been trained for.
         return int(self._training_steps / self.config.batch_size)
+
+    def training_steps_counter(self) -> int:
+        return self._training_steps
 
     def increment_training_steps(self):
         self._training_steps += 1

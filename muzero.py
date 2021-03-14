@@ -3,12 +3,13 @@
 # pylint: disable=unused-argument
 # pylint: disable=missing-docstring
 # pylint: disable=g-explicit-length-test
+import logging
 from threading import Thread
 from typing import Any
 
 import numpy as np
 import tensorflow as tf
-from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.optimizers import SGD
 # MuZero training is split into two independent parts: Network training and
 # self-play data generation.
 # These two parts only communicate by transferring the latest network checkpoint
@@ -22,6 +23,7 @@ from games.game import ReplayBuffer, Game, make_atari_config
 from mcts import Node, expand_node, backpropagate, add_exploration_noise, run_mcts, select_action
 from models.network import Network
 from storage import SharedStorage
+from summary import write_summary_loss
 from utils import MinMaxStats, scalar_to_support
 
 
@@ -32,6 +34,12 @@ from utils import MinMaxStats, scalar_to_support
 # snapshot, produces a game and makes it available to the training job by
 # writing it to a shared replay buffer.
 from utils.exports import save_checkpoints, export_models
+
+
+def run_selfplay_once(config: MuZeroConfig, storage: SharedStorage, replay_buffer: ReplayBuffer):
+    network = storage.latest_network()
+    game = play_game(config, network)
+    replay_buffer.save_game(game)
 
 
 def run_selfplay(config: MuZeroConfig, storage: SharedStorage, replay_buffer: ReplayBuffer):
@@ -78,13 +86,15 @@ def play_game(config: MuZeroConfig, network: Network) -> Game:
 def train_network(config: MuZeroConfig,
                   storage: SharedStorage,
                   replay_buffer: ReplayBuffer):
-    network = Network(config)
+    network = storage.latest_network()
     lr_schedule = ExponentialDecay(
         initial_learning_rate=config.lr_init,
         decay_steps=config.lr_decay_steps,
         decay_rate=config.lr_decay_rate
     )
-    optimizer = Adam(learning_rate=lr_schedule)
+    #optimizer = Adam(learning_rate=lr_schedule)
+    #optimizer = Adam(learning_rate=config.lr_init)
+    optimizer = SGD(learning_rate=config.lr_init, momentum=config.momentum)
 
     for i in range(config.training_steps):
         if i % config.checkpoint_interval == 0:
@@ -96,12 +106,12 @@ def train_network(config: MuZeroConfig,
     storage.save_network(config.training_steps, network)
 
 
-def scale_gradient(tensor: Any, scale):
+def scale_gradient(tensor, scale):
     """Scales the gradient for the backward pass."""
     return tensor * scale + tf.stop_gradient(tensor) * (1 - scale)
 
 
-def update_weights(optimizer: tf.keras.optimizers.Optimizer, network: Network, batch, weight_decay: float):
+def update_weights(optimizer: tf.optimizers.Optimizer, network: Network, batch, weight_decay: float):
     def loss():
         loss = 0
         for observations, actions, targets in batch:
@@ -135,6 +145,7 @@ def update_weights(optimizer: tf.keras.optimizers.Optimizer, network: Network, b
                     loss += scale_gradient((value_loss * 0.25) + policy_loss + reward_loss, gradient_scale)
 
         loss /= len(batch)
+        write_summary_loss(float(loss), network.training_steps_counter())
         return loss
 
     optimizer.minimize(loss=loss, var_list=network.cb_get_variables())
@@ -151,7 +162,7 @@ def scalar_loss(prediction, target):
     return tf.cast(tf.nn.softmax_cross_entropy_with_logits(logits=prediction, labels=target), dtype=tf.float32)
     # target = tf.math.sign(target) * (tf.math.sqrt(tf.math.abs(target) + 1) - 1) + 0.001 * target
     # return tf.reduce_sum(tf.keras.losses.MSE(y_true=target, y_pred=prediction))
-    # return tf.reduce_sum(-target * tf.nn.log_softmax(prediction))
+    #return tf.cast(tf.reduce_sum(-tf.nn.log_softmax(prediction, axis=-1) * target), dtype=tf.float32)
     # return tf.reduce_sum(tf.nn.softmax_cross_entropy_with_logits(target, prediction))
 
 
@@ -169,10 +180,16 @@ def muzero(config: MuZeroConfig):
     storage = SharedStorage(config)
     replay_buffer = ReplayBuffer(config)
 
-    t = Thread(target=run_selfplay, args=(config, storage, replay_buffer))
-    t.start()
+    # run once to avoid Tracing inside thread games loop
+    network = Network(config)
+    storage.save_network(0, network)
+    run_selfplay_once(config, storage, replay_buffer)
 
-    while len(replay_buffer.buffer) == 0:
+    for i in range(config.num_actors):
+        t = Thread(target=run_selfplay, args=(config, storage, replay_buffer))
+        t.start()
+
+    while len(replay_buffer.buffer) < 10:
         pass
 
     train_network(config, storage, replay_buffer)

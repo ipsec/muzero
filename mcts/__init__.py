@@ -45,7 +45,7 @@ def select_action(config: MuZeroConfig, num_moves: int, node: Node,
     t = config.visit_softmax_temperature_fn(
         config=config,
         num_moves=num_moves,
-        training_steps=network.training_steps())
+        training_steps=network.training_steps_counter())
     return softmax_sample(visit_counts, t)
 
 

@@ -12,3 +12,8 @@ def write_summary_score(score, step):
         tf.summary.scalar("Score", score, step)
         tf.summary.flush()
 
+
+def write_summary_loss(loss, step):
+    with summary_writer.as_default():
+        tf.summary.scalar("Loss", loss, step)
+        tf.summary.flush()
