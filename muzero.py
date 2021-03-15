@@ -24,8 +24,7 @@ from mcts import Node, expand_node, backpropagate, add_exploration_noise, run_mc
 from models.network import Network
 from storage import SharedStorage
 from summary import write_summary_loss
-from utils import MinMaxStats, scalar_to_support
-
+from utils import MinMaxStats, tf_scalar_to_support
 
 ##################################
 ####### Part 1: Self-Play ########
@@ -92,8 +91,8 @@ def train_network(config: MuZeroConfig,
         decay_steps=config.lr_decay_steps,
         decay_rate=config.lr_decay_rate
     )
-    #optimizer = Adam(learning_rate=lr_schedule)
-    #optimizer = Adam(learning_rate=config.lr_init)
+    # optimizer = Adam(learning_rate=lr_schedule)
+    # optimizer = Adam(learning_rate=config.lr_init)
     optimizer = SGD(learning_rate=config.lr_init, momentum=config.momentum)
 
     for i in range(config.training_steps):
@@ -106,13 +105,14 @@ def train_network(config: MuZeroConfig,
     storage.save_network(config.training_steps, network)
 
 
+@tf.function
 def scale_gradient(tensor, scale):
     """Scales the gradient for the backward pass."""
     return tensor * scale + tf.stop_gradient(tensor) * (1 - scale)
 
 
 def update_weights(optimizer: tf.optimizers.Optimizer, network: Network, batch, weight_decay: float):
-    def loss():
+    with tf.GradientTape() as f_tape, tf.GradientTape() as g_tape, tf.GradientTape() as h_tape:
         loss = 0
         for observations, actions, targets in batch:
             # Initial step, from the real observation.
@@ -142,27 +142,36 @@ def update_weights(optimizer: tf.optimizers.Optimizer, network: Network, batch, 
                     if k > 0:
                         reward_loss = scalar_loss(network_output.reward, target_reward)
 
-                    loss += scale_gradient((value_loss * 0.25) + policy_loss + reward_loss, gradient_scale)
+                    # loss += scale_gradient((value_loss * 0.25) + policy_loss + reward_loss, gradient_scale)
+                    loss += scale_gradient((value_loss + policy_loss + reward_loss), gradient_scale)
 
         loss /= len(batch)
-        write_summary_loss(float(loss), network.training_steps_counter())
-        return loss
+        for weights in network.get_weights():
+            loss += weight_decay * tf.nn.l2_loss(weights)
 
-    optimizer.minimize(loss=loss, var_list=network.cb_get_variables())
+        write_summary_loss(float(loss), network.training_steps_counter())
+
+    f_grad = f_tape.gradient(loss, network.f_prediction.trainable_variables)
+    g_grad = g_tape.gradient(loss, network.g_dynamics.trainable_variables)
+    h_grad = h_tape.gradient(loss, network.h_representation.trainable_variables)
+    optimizer.apply_gradients(zip(f_grad, network.f_prediction.trainable_variables))
+    optimizer.apply_gradients(zip(g_grad, network.g_dynamics.trainable_variables))
+    optimizer.apply_gradients(zip(h_grad, network.h_representation.trainable_variables))
+
     network.increment_training_steps()
 
 
 def scalar_loss(prediction, target):
-    target = tf.constant(target, dtype=tf.float32, shape=(1,))
-    prediction = tf.constant(prediction, dtype=tf.float32, shape=(1,))
+    target = tf.constant(target, dtype=tf.float32, shape=(1, 1))
+    prediction = tf.constant(prediction, dtype=tf.float32, shape=(1, 1))
 
-    target = scalar_to_support(np.array([float(target)]), 20)
-    prediction = scalar_to_support(np.array([float(prediction)]), 20)
+    target = tf_scalar_to_support(target, 300)
+    prediction = tf_scalar_to_support(prediction, 300)
     # return tf.cast(tf.losses.categorical_crossentropy(target, prediction), dtype=tf.float32)
     return tf.cast(tf.nn.softmax_cross_entropy_with_logits(logits=prediction, labels=target), dtype=tf.float32)
     # target = tf.math.sign(target) * (tf.math.sqrt(tf.math.abs(target) + 1) - 1) + 0.001 * target
     # return tf.reduce_sum(tf.keras.losses.MSE(y_true=target, y_pred=prediction))
-    #return tf.cast(tf.reduce_sum(-tf.nn.log_softmax(prediction, axis=-1) * target), dtype=tf.float32)
+    # return tf.cast(tf.reduce_sum(-tf.nn.log_softmax(prediction, axis=-1) * target), dtype=tf.float32)
     # return tf.reduce_sum(tf.nn.softmax_cross_entropy_with_logits(target, prediction))
 
 

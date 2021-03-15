@@ -9,7 +9,7 @@ from tensorflow.keras.models import Model
 from config import MuZeroConfig
 from games.game import Action
 from models import NetworkOutput
-from utils import support_to_scalar
+from utils import tf_support_to_scalar
 
 
 def scale(t: tf.Tensor):
@@ -24,7 +24,7 @@ class Dynamics(Model, ABC):
         """
         super(Dynamics, self).__init__()
         neurons = 20
-        self.support = 20
+        self.support = 300
         self.regularizer = regularizers.l2(1e-4)
         self.s_inputs = Dense(neurons,
                               input_shape=(encoded_space_size,),
@@ -76,7 +76,7 @@ class Prediction(Model, ABC):
         """
         super(Prediction, self).__init__()
         neurons = 20
-        self.support = 20
+        self.support = 300
         self.regularizer = regularizers.l2(1e-4)
         self.p_inputs = Dense(neurons,
                               input_shape=(hidden_state_size,),
@@ -175,7 +175,7 @@ class Network(object):
         p, v = self.f_prediction(s_0)
 
         return NetworkOutput(
-            value=float(support_to_scalar(tf.squeeze(v).numpy(), 20)),
+            value=float(tf_support_to_scalar(v, 300)),
             reward=tf.constant([[0.0]]),
             policy_logits=NetworkOutput.build_policy_logits(policy_logits=p),
             hidden_state=s_0,
@@ -193,8 +193,8 @@ class Network(object):
         p, v = self.f_prediction(s_k)
 
         return NetworkOutput(
-            value=float(support_to_scalar(tf.squeeze(v).numpy(), 20)),
-            reward=float(support_to_scalar(tf.squeeze(r_k).numpy(), 20)),
+            value=float(tf_support_to_scalar(v, 300)),
+            reward=float(tf_support_to_scalar(r_k, 300)),
             policy_logits=NetworkOutput.build_policy_logits(policy_logits=p),
             hidden_state=s_k
         )
