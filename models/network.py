@@ -48,7 +48,7 @@ class Dynamics(Model, ABC):
         self.r_common = Dense(neurons,
                               activation=tf.nn.relu,
                               kernel_regularizer=self.regularizer)
-        self.r_k = Dense(self.support * 2 + 1, activation=tf.nn.softmax, kernel_regularizer=self.regularizer)
+        self.r_k = Dense(self.support * 2 + 1, activation=tf.nn.sigmoid, kernel_regularizer=self.regularizer)
 
     @tf.function
     def call(self, encoded_space, **kwargs):
@@ -88,7 +88,7 @@ class Prediction(Model, ABC):
         self.p_common = Dense(neurons,
                               activation=tf.nn.relu,
                               kernel_regularizer=self.regularizer)
-        self.policy = Dense(action_state_size, kernel_regularizer=self.regularizer)
+        self.policy = Dense(action_state_size, activation=tf.nn.sigmoid, kernel_regularizer=self.regularizer)
 
         self.v_inputs = Dense(neurons,
                               input_shape=(hidden_state_size,),
@@ -100,7 +100,7 @@ class Prediction(Model, ABC):
         self.v_common = Dense(neurons,
                               activation=tf.nn.relu,
                               kernel_regularizer=self.regularizer)
-        self.value = Dense(self.support * 2 + 1, activation=tf.nn.softmax, kernel_regularizer=self.regularizer)
+        self.value = Dense(self.support * 2 + 1, activation=tf.nn.sigmoid, kernel_regularizer=self.regularizer)
 
     @tf.function
     def call(self, hidden_state, **kwargs):
@@ -168,7 +168,6 @@ class Network(object):
 
         # representation
         observation = tf.expand_dims(observation, 0)
-        observation = scale(observation)
         s_0 = self.h_representation(observation)
 
         # prediction

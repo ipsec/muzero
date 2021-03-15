@@ -55,12 +55,12 @@ class Node(object):
 
 
 @tf.function
-def atari_reward_transform(x: tf.Tensor, eps: float = 0.001) -> tf.Tensor:
-    return tf.math.sign(x) * (tf.math.sqrt(tf.math.abs(x) + 1) - 1) + tf.constant(eps) * x
+def atari_reward_transform(x: float, eps: float = 0.001) -> tf.Tensor:
+    return tf.math.sign(x) * (tf.math.sqrt(tf.math.abs(x) + 1) - 1) + eps * x
 
 
 @tf.function
-def inverse_atari_reward_transform(x: tf.Tensor, eps: float = 0.001) -> tf.Tensor:
+def inverse_atari_reward_transform(x: float, eps: float = 0.001) -> tf.Tensor:
     return tf.math.sign(x) * (((tf.math.sqrt(1. + 4. * eps * (tf.math.abs(x) + 1 + eps)) - 1) / (2 * eps)) ** 2 - 1)
 
 
