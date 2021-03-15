@@ -113,7 +113,7 @@ def scale_gradient(tensor, scale):
 
 
 def update_weights(optimizer: tf.optimizers.Optimizer, network: Network, batch, weight_decay: float):
-    with tf.GradientTape() as f_tape, tf.GradientTape() as g_tape, tf.GradientTape() as h_tape:
+    def loss():
         loss = 0
         for observations, actions, targets in batch:
             # Initial step, from the real observation.
@@ -151,13 +151,9 @@ def update_weights(optimizer: tf.optimizers.Optimizer, network: Network, batch, 
             loss += weight_decay * tf.nn.l2_loss(weights)
 
         write_summary_loss(float(loss), network.training_steps_counter())
+        return loss
 
-    f_grad = f_tape.gradient(loss, network.f_prediction.trainable_variables)
-    g_grad = g_tape.gradient(loss, network.g_dynamics.trainable_variables)
-    h_grad = h_tape.gradient(loss, network.h_representation.trainable_variables)
-    optimizer.apply_gradients(zip(f_grad, network.f_prediction.trainable_variables))
-    optimizer.apply_gradients(zip(g_grad, network.g_dynamics.trainable_variables))
-    optimizer.apply_gradients(zip(h_grad, network.h_representation.trainable_variables))
+    optimizer.minimize(loss=loss, var_list=network.cb_get_variables())
 
     network.increment_training_steps()
 
