@@ -10,6 +10,7 @@ from typing import Any
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras.optimizers import SGD
+from tensorflow.keras.losses import CategoricalCrossentropy
 # MuZero training is split into two independent parts: Network training and
 # self-play data generation.
 # These two parts only communicate by transferring the latest network checkpoint
@@ -167,8 +168,9 @@ def scalar_loss(prediction, target):
 
     target = tf_scalar_to_support(target, 300)
     prediction = tf_scalar_to_support(prediction, 300)
-    # return tf.cast(tf.losses.categorical_crossentropy(target, prediction), dtype=tf.float32)
-    return tf.cast(tf.nn.softmax_cross_entropy_with_logits(logits=prediction, labels=target), dtype=tf.float32)
+    cce = CategoricalCrossentropy(from_logits=True)
+    return cce(target, prediction)
+    # return tf.cast(tf.nn.softmax_cross_entropy_with_logits(logits=prediction, labels=target), dtype=tf.float32)
     # target = tf.math.sign(target) * (tf.math.sqrt(tf.math.abs(target) + 1) - 1) + 0.001 * target
     # return tf.reduce_sum(tf.keras.losses.MSE(y_true=target, y_pred=prediction))
     # return tf.cast(tf.reduce_sum(-tf.nn.log_softmax(prediction, axis=-1) * target), dtype=tf.float32)
