@@ -15,19 +15,17 @@ class MuZeroConfig(object):
                  batch_size: int,
                  td_steps: int,
                  num_actors: int,
-                 num_games: int,
-                 episodes: int,
                  lr_init: float,
                  lr_decay_steps: float,
+                 lr_decay_rate: float,
                  visit_softmax_temperature_fn,
-                 training_steps: int = int(1000e3),
+                 training_steps: int = 5000,
                  known_bounds: Optional[KnownBounds] = None):
 
         # Self-Play
         self.state_space_size = state_space_size
         self.action_space_size = action_space_size
         self.num_actors = num_actors
-        self.num_games = num_games
 
         self.visit_softmax_temperature_fn = visit_softmax_temperature_fn
         self.max_moves = max_moves
@@ -49,10 +47,10 @@ class MuZeroConfig(object):
         self.known_bounds = known_bounds
 
         # Training
-        self.episodes = episodes
         self.training_steps = training_steps
-        self.checkpoint_interval = int(1e3)
-        self.window_size = int(1e6)
+        self.epochs = 5000
+        self.checkpoint_interval = 100
+        self.window_size = 1000000
         self.batch_size = batch_size
         self.num_unroll_steps = 5
         self.td_steps = td_steps
@@ -62,5 +60,5 @@ class MuZeroConfig(object):
 
         # Exponential learning rate schedule
         self.lr_init = lr_init
-        self.lr_decay_rate = 0.1
+        self.lr_decay_rate = lr_decay_rate
         self.lr_decay_steps = lr_decay_steps

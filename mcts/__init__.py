@@ -45,7 +45,7 @@ def select_action(config: MuZeroConfig, num_moves: int, node: Node,
     t = config.visit_softmax_temperature_fn(
         config=config,
         num_moves=num_moves,
-        training_steps=network.training_steps())
+        training_steps=network.training_steps_counter())
     return softmax_sample(visit_counts, t)
 
 
@@ -113,9 +113,8 @@ def add_exploration_noise(config: MuZeroConfig, node: Node):
 # Stubs to make the typechecker happy.
 def softmax_sample(distribution, temperature: float):
     # helper function to sample an index from a probability array
-    d = [x for x, y in distribution]
-    d = np.array(d) ** (1 / temperature)
-    p_sum = d.sum()
-    sample_temp = d / p_sum
-    action = np.argmax(np.random.multinomial(1, sample_temp, 1))
+    d = np.asarray([x for x, y in distribution])
+    counts = d ** (1 / temperature)
+    probs = counts / sum(counts)
+    action = np.random.choice(len(counts), p=probs)
     return distribution[action][1]

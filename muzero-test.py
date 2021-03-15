@@ -3,8 +3,8 @@ import operator
 import gym
 
 from games.game import make_atari_config
-from muzero import load_checkpoints
 from storage import SharedStorage
+from utils.exports import load_checkpoints
 
 env = gym.make("LunarLander-v2")
 observation = env.reset()

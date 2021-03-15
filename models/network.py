@@ -1,82 +1,122 @@
 from abc import ABC
-from typing import Tuple, Callable, List
+from typing import Callable, List
 
 import tensorflow as tf
+from tensorflow.keras import regularizers
 from tensorflow.keras.layers import Dense
 from tensorflow.keras.models import Model
 
 from config import MuZeroConfig
 from games.game import Action
 from models import NetworkOutput
+from utils import tf_support_to_scalar
 
-"""
-g = dynamics
-    inputs: hidden state (s^[k-1], a^k)
-    outputs: intermediate reward (r^k), new hidden state (s^k) 
-    
-f = prediction
-    inputs: hidden state (s^k)
-    outputs: policy (p^k), value (v^k)
 
-h = representation
-    inputs: observation (o_n)
-    outputs: hidden state (s^0)
-"""
+def scale(t: tf.Tensor):
+    return (t - tf.reduce_min(t)) / (tf.reduce_max(t) - tf.reduce_min(t))
 
 
 class Dynamics(Model, ABC):
-    def __init__(self, hidden_state_size: int):
+    def __init__(self, hidden_state_size: int, encoded_space_size: int):
         """
         r^k, s^k = g_0(s^(k-1), a^k)
-        :param hidden_state_size: size of hidden state
+        :param encoded_space_size: size of hidden state
         """
         super(Dynamics, self).__init__()
-        neurons = 128
-        self.inputs = Dense(neurons, activation=tf.nn.relu)
-        self.hidden = Dense(neurons, activation=tf.nn.relu)
-        self.common = Dense(neurons, activation=tf.nn.relu)
-        self.s_k = Dense(hidden_state_size, activation=tf.nn.relu)
-        self.r_k = Dense(1)
+        neurons = 20
+        self.support = 300
+        self.regularizer = regularizers.l2(1e-4)
+        self.s_inputs = Dense(neurons,
+                              input_shape=(encoded_space_size,),
+                              activation=tf.nn.relu,
+                              kernel_regularizer=self.regularizer)
+        self.s_hidden = Dense(neurons,
+                              activation=tf.nn.relu,
+                              kernel_regularizer=self.regularizer)
+        self.s_common = Dense(neurons,
+                              activation=tf.nn.relu,
+                              kernel_regularizer=self.regularizer)
+        self.s_k = Dense(hidden_state_size, activation=tf.nn.relu, kernel_regularizer=self.regularizer)
 
-    #@tf.function(experimental_relax_shapes=True)
+        self.r_inputs = Dense(neurons,
+                              input_shape=(encoded_space_size,),
+                              activation=tf.nn.relu,
+                              kernel_regularizer=self.regularizer)
+        self.r_hidden = Dense(neurons,
+                              activation=tf.nn.relu,
+                              kernel_regularizer=self.regularizer)
+        self.r_common = Dense(neurons,
+                              activation=tf.nn.relu,
+                              kernel_regularizer=self.regularizer)
+        self.r_k = Dense(self.support * 2 + 1, activation=tf.nn.sigmoid, kernel_regularizer=self.regularizer)
+
+    @tf.function
     def call(self, encoded_space, **kwargs):
         """
         :param encoded_space: hidden state concatenated with one_hot action
         :return: NetworkOutput with reward (r^k) and hidden state (s^k)
         """
-        x = self.inputs(encoded_space)
-        x = self.hidden(x)
-        x = self.common(x)
-        s_k = self.s_k(x)
-        r_k = self.r_k(x)
+        s = self.s_inputs(encoded_space)
+        s = self.s_hidden(s)
+        s = self.s_common(s)
+        s_k = self.s_k(s)
+
+        r = self.r_inputs(encoded_space)
+        r = self.r_hidden(r)
+        r = self.r_common(r)
+        r_k = self.r_k(r)
         return s_k, r_k
 
 
 class Prediction(Model, ABC):
-    def __init__(self, action_state_size: int):
+    def __init__(self, action_state_size: int, hidden_state_size: int):
         """
         p^k, v^k = f_0(s^k)
         :param action_state_size: size of action state
         """
         super(Prediction, self).__init__()
-        neurons = 128
-        self.inputs = Dense(neurons, activation=tf.nn.relu)
-        self.hidden = Dense(neurons, activation=tf.nn.relu)
-        self.common = Dense(neurons, activation=tf.nn.relu)
-        self.policy = Dense(action_state_size, activation=tf.nn.tanh)
-        self.value = Dense(1)
+        neurons = 20
+        self.support = 300
+        self.regularizer = regularizers.l2(1e-4)
+        self.p_inputs = Dense(neurons,
+                              input_shape=(hidden_state_size,),
+                              activation=tf.nn.relu,
+                              kernel_regularizer=self.regularizer)
+        self.p_hidden = Dense(neurons,
+                              activation=tf.nn.relu,
+                              kernel_regularizer=self.regularizer)
+        self.p_common = Dense(neurons,
+                              activation=tf.nn.relu,
+                              kernel_regularizer=self.regularizer)
+        self.policy = Dense(action_state_size, activation=tf.nn.sigmoid, kernel_regularizer=self.regularizer)
 
-    #@tf.function(experimental_relax_shapes=True)
+        self.v_inputs = Dense(neurons,
+                              input_shape=(hidden_state_size,),
+                              activation=tf.nn.relu,
+                              kernel_regularizer=self.regularizer)
+        self.v_hidden = Dense(neurons,
+                              activation=tf.nn.relu,
+                              kernel_regularizer=self.regularizer)
+        self.v_common = Dense(neurons,
+                              activation=tf.nn.relu,
+                              kernel_regularizer=self.regularizer)
+        self.value = Dense(self.support * 2 + 1, activation=tf.nn.sigmoid, kernel_regularizer=self.regularizer)
+
+    @tf.function
     def call(self, hidden_state, **kwargs):
         """
         :param hidden_state
         :return: NetworkOutput with policy logits and value
         """
-        x = self.inputs(hidden_state)
-        x = self.hidden(x)
-        x = self.common(x)
-        policy = self.policy(x)
-        value = self.value(x)
+        p = self.p_inputs(hidden_state)
+        p = self.p_hidden(p)
+        p = self.p_common(p)
+        policy = self.policy(p)
+
+        v = self.v_inputs(hidden_state)
+        v = self.v_hidden(v)
+        v = self.v_common(v)
+        value = self.value(v)
 
         return policy, value
 
@@ -88,19 +128,26 @@ class Representation(Model, ABC):
         :param observation_space_size
         """
         super(Representation, self).__init__()
-        neurons = 128
-        self.inputs = Dense(neurons, activation=tf.nn.relu)
-        self.hidden = Dense(neurons, activation=tf.nn.relu)
-        self.common = Dense(neurons, activation=tf.nn.relu)
-        self.s0 = Dense(observation_space_size, activation=tf.nn.relu)
+        neurons = 20
+        self.regularizer = regularizers.l2(1e-4)
+        self.inputs = Dense(neurons,
+                            input_shape=(observation_space_size,),
+                            activation=tf.nn.relu,
+                            kernel_regularizer=self.regularizer)
+        self.hidden = Dense(neurons,
+                            activation=tf.nn.relu,
+                            kernel_regularizer=self.regularizer)
+        self.common = Dense(neurons,
+                            activation=tf.nn.relu,
+                            kernel_regularizer=self.regularizer)
+        self.s0 = Dense(observation_space_size, activation=tf.nn.relu, kernel_regularizer=self.regularizer)
 
-    #@tf.function(experimental_relax_shapes=True)
+    @tf.function
     def call(self, observation, **kwargs):
         """
         :param observation
         :return: state s0
         """
-        observation = tf.expand_dims(observation, 0)
         x = self.inputs(observation)
         x = self.hidden(x)
         x = self.common(x)
@@ -111,8 +158,8 @@ class Representation(Model, ABC):
 class Network(object):
     def __init__(self, config: MuZeroConfig):
         self.config = config
-        self.g_dynamics = Dynamics(config.state_space_size)
-        self.f_prediction = Prediction(config.action_space_size)
+        self.g_dynamics = Dynamics(config.state_space_size, config.action_space_size + config.state_space_size)
+        self.f_prediction = Prediction(config.action_space_size, config.state_space_size)
         self.h_representation = Representation(config.state_space_size)
         self._training_steps = 0
 
@@ -120,14 +167,15 @@ class Network(object):
         # representation + prediction function
 
         # representation
+        observation = tf.expand_dims(observation, 0)
         s_0 = self.h_representation(observation)
 
         # prediction
         p, v = self.f_prediction(s_0)
 
         return NetworkOutput(
-            value=float(v),
-            reward=float(0.0),
+            value=float(tf_support_to_scalar(v, 300)),
+            reward=tf.constant([[0.0]]),
             policy_logits=NetworkOutput.build_policy_logits(policy_logits=p),
             hidden_state=s_0,
         )
@@ -144,8 +192,8 @@ class Network(object):
         p, v = self.f_prediction(s_k)
 
         return NetworkOutput(
-            value=float(v),
-            reward=float(r_k),
+            value=float(tf_support_to_scalar(v, 300)),
+            reward=float(tf_support_to_scalar(r_k, 300)),
             policy_logits=NetworkOutput.build_policy_logits(policy_logits=p),
             hidden_state=s_k
         )
@@ -173,6 +221,9 @@ class Network(object):
     def training_steps(self) -> int:
         # How many steps / batches the network has been trained for.
         return int(self._training_steps / self.config.batch_size)
+
+    def training_steps_counter(self) -> int:
+        return self._training_steps
 
     def increment_training_steps(self):
         self._training_steps += 1

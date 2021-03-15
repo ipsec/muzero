@@ -1,9 +1,11 @@
+import random
 from typing import List
 
 import gym
 import numpy as np
 
 from config import MuZeroConfig
+from summary import write_summary_score
 from utils import Node
 
 
@@ -63,8 +65,8 @@ class Game(object):
     """A single episode of interaction with the environment."""
 
     def __init__(self, action_space_size: int, discount: float):
-        self.env = gym.make('LunarLander-v2')
-        # self.env = gym.make('CartPole-v1')
+        # self.env = gym.make('LunarLander-v2')
+        self.env = gym.make('CartPole-v1')
         self.states = [self.env.reset()]
         self.history = []
         self.rewards = []
@@ -77,6 +79,9 @@ class Game(object):
 
     def terminal(self) -> bool:
         # Game specific termination rules.
+        if self.done:
+            self.env.close()
+
         return self.done
 
     def legal_actions(self) -> List[Action]:
@@ -143,10 +148,21 @@ class ReplayBuffer(object):
         self.window_size = config.window_size
         self.batch_size = config.batch_size
         self.buffer = []
+        self.counter = 0
+        self.loss_counter = 0
+        self.scores = []
+
+    def score_mean(self):
+        return np.mean(self.scores)
 
     def save_game(self, game):
         if len(self.buffer) > self.window_size:
             self.buffer.pop(0)
+
+        self.counter += 1
+        score = np.sum(game.rewards)
+        self.scores.append(score)
+        write_summary_score(score, self.counter)
         self.buffer.append(game)
 
     def sample_batch(self, num_unroll_steps: int, td_steps: int):
@@ -158,44 +174,36 @@ class ReplayBuffer(object):
 
     def sample_game(self) -> Game:
         # Sample game from buffer either uniformly or according to some priority.
-        return np.random.choice(self.buffer)
+        return random.choice(self.buffer)
+        # return np.random.choice(self.buffer)
 
     def sample_position(self, game) -> int:
         # Sample position from game either uniformly or according to some priority.
-        return np.random.choice(len(game.history))
+        return random.randrange(len(game.history))
+        # return np.random.choice(len(game.history))
 
 
 def make_atari_config() -> MuZeroConfig:
     def visit_softmax_temperature(config: MuZeroConfig, num_moves, training_steps):
-        """
-        temp = 1.0
-        if training_steps < int(config.training_steps):
-            temp = 0.25
-
-        if training_steps < int(config.training_steps / 2):
-            temp = 0.5
-
-        if training_steps < int(config.training_steps / 3):
-            temp = 1.0
-
-        return temp
-        """
-
-        return 1.0
+        if training_steps < 500:
+            return 1.0
+        elif training_steps < 750:
+            return 0.5
+        else:
+            return 0.15
 
     return MuZeroConfig(
-        state_space_size=8,
-        action_space_size=4,
-        max_moves=700,          # Half an hour at action repeat 4.
-        discount=0.999,
+        state_space_size=4,
+        action_space_size=2,
+        max_moves=1000,  # Half an hour at action repeat 4.
+        discount=0.99,
         dirichlet_alpha=0.25,
-        num_simulations=50,      # Number of future moves self-simulated
-        batch_size=32,
-        td_steps=10,             # Number of steps in the future to take into account for calculating the target value
-        num_actors=4,
-        num_games=1,
-        training_steps=10,
-        episodes=5000,
-        lr_init=0.001,
-        lr_decay_steps=10,
+        num_simulations=15,  # Number of future moves self-simulated
+        batch_size=128,
+        td_steps=10,  # Number of steps in the future to take into account for calculating the target value
+        num_actors=1,
+        training_steps=10000,
+        lr_init=0.01,
+        lr_decay_steps=100,
+        lr_decay_rate=0.96,
         visit_softmax_temperature_fn=visit_softmax_temperature)
