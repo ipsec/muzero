@@ -108,7 +108,7 @@ def train_network(config: MuZeroConfig,
             save_checkpoints(storage.latest_network())
         batch = replay_buffer.sample_batch(config.num_unroll_steps, config.td_steps)
         loss = update_weights(optimizer, network, batch, config.weight_decay)
-        write_summary_loss(loss, network.training_steps_counter())
+        write_summary_loss(float(loss), network.training_steps_counter())
         logging.debug(f"Step: {network.training_steps_counter():05d} - Loss: {float(loss):.2f}")
 
     storage.save_network(config.training_steps, network)
