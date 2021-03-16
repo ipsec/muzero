@@ -5,12 +5,11 @@
 # pylint: disable=g-explicit-length-test
 import logging
 from threading import Thread
-from typing import Any
 
 import numpy as np
 import tensorflow as tf
-from tensorflow.keras.optimizers import SGD
 from tensorflow.keras.losses import CategoricalCrossentropy
+from tensorflow.keras.optimizers import SGD
 # MuZero training is split into two independent parts: Network training and
 # self-play data generation.
 # These two parts only communicate by transferring the latest network checkpoint
@@ -26,6 +25,10 @@ from models.network import Network
 from storage import SharedStorage
 from summary import write_summary_loss
 from utils import MinMaxStats, tf_scalar_to_support
+
+FORMAT = '%(asctime)-15s %(clientip)s %(user)-8s %(message)s'
+
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)-15s %(threadName)s %(message)s')
 
 ##################################
 ####### Part 1: Self-Play ########
@@ -47,6 +50,8 @@ def run_selfplay(config: MuZeroConfig, storage: SharedStorage, replay_buffer: Re
         network = storage.latest_network()
         game = play_game(config, network)
         replay_buffer.save_game(game)
+        reward_mean = np.mean([np.sum(game.rewards) for game in replay_buffer.buffer])
+        logging.debug(f"Game Reward: {np.sum(game.rewards):.2f} - Mean: {reward_mean:.2f}")
 
 
 # Each game is produced by starting at the initial board position, then
@@ -73,6 +78,7 @@ def play_game(config: MuZeroConfig, network: Network) -> Game:
         action = select_action(config, len(game.history), root, network)
         game.apply(action)
         game.store_search_statistics(root)
+
     return game
 
 
@@ -101,7 +107,9 @@ def train_network(config: MuZeroConfig,
             storage.save_network(i, network)
             save_checkpoints(storage.latest_network())
         batch = replay_buffer.sample_batch(config.num_unroll_steps, config.td_steps)
-        update_weights(optimizer, network, batch, config.weight_decay)
+        loss = update_weights(optimizer, network, batch, config.weight_decay)
+        write_summary_loss(loss, network.training_steps_counter())
+        logging.debug(f"Step: {network.training_steps_counter():05d} - Loss: {float(loss):.2f}")
 
     storage.save_network(config.training_steps, network)
 
@@ -112,65 +120,77 @@ def scale_gradient(tensor, scale):
     return tensor * scale + tf.stop_gradient(tensor) * (1 - scale)
 
 
-def update_weights(optimizer: tf.optimizers.Optimizer, network: Network, batch, weight_decay: float):
-    def loss():
-        loss = 0
-        for observations, actions, targets in batch:
-            # Initial step, from the real observation.
-            network_output = network.initial_inference(observations)
-            hidden_state = network_output.hidden_state
-            predictions = [(1.0, network_output)]
-
-            # Recurrent steps, from action and previous hidden state.
-            for action in actions:
-                network_output = network.recurrent_inference(hidden_state, action)
-                hidden_state = network_output.hidden_state
-                predictions.append((1.0 / len(actions), network_output))
-
-                hidden_state = scale_gradient(hidden_state, 0.5)
-
-            for k, (prediction, target) in enumerate(zip(predictions, targets)):
-                gradient_scale, network_output = prediction
-                target_value, target_reward, target_policy = target
-                if target_policy:
-                    p_logits = tf.stack(list(network_output.policy_logits.values()))
-                    p_labels = tf.convert_to_tensor(target_policy)
-                    policy_loss = tf.nn.softmax_cross_entropy_with_logits(logits=p_logits, labels=p_labels)
-
-                    value_loss = scalar_loss(network_output.value, target_value)
-                    reward_loss = 0.0
-
-                    if k > 0:
-                        reward_loss = scalar_loss(network_output.reward, target_reward)
-
-                    # loss += scale_gradient((value_loss * 0.25) + policy_loss + reward_loss, gradient_scale)
-                    loss += scale_gradient((value_loss + policy_loss + reward_loss), gradient_scale)
-
-        loss /= len(batch)
-        for weights in network.get_weights():
-            loss += weight_decay * tf.nn.l2_loss(weights)
-
-        write_summary_loss(float(loss), network.training_steps_counter())
-        return loss
-
-    optimizer.minimize(loss=loss, var_list=network.cb_get_variables())
-
-    network.increment_training_steps()
-
-
+@tf.function
 def scalar_loss(prediction, target):
-    target = tf.constant(target, dtype=tf.float32, shape=(1, 1))
-    prediction = tf.constant(prediction, dtype=tf.float32, shape=(1, 1))
+    # target = tf.constant(target, dtype=tf.float32, shape=(1, 1))
+    # prediction = tf.constant(prediction, dtype=tf.float32, shape=(1, 1))
+    target = tf.convert_to_tensor([[target]], dtype=tf.float32)
+    prediction = tf.convert_to_tensor([[prediction]], dtype=tf.float32)
 
     target = tf_scalar_to_support(target, 300)
     prediction = tf_scalar_to_support(prediction, 300)
-    cce = CategoricalCrossentropy(from_logits=True)
-    return cce(target, prediction)
+    return tf.reduce_sum(-target * tf.nn.log_softmax(prediction))
+    # cce = CategoricalCrossentropy(from_logits=True)
+    # return cce(target, prediction)
     # return tf.cast(tf.nn.softmax_cross_entropy_with_logits(logits=prediction, labels=target), dtype=tf.float32)
     # target = tf.math.sign(target) * (tf.math.sqrt(tf.math.abs(target) + 1) - 1) + 0.001 * target
     # return tf.reduce_sum(tf.keras.losses.MSE(y_true=target, y_pred=prediction))
     # return tf.cast(tf.reduce_sum(-tf.nn.log_softmax(prediction, axis=-1) * target), dtype=tf.float32)
     # return tf.reduce_sum(tf.nn.softmax_cross_entropy_with_logits(target, prediction))
+
+
+@tf.function
+def compute_loss(network: Network, batch, weight_decay: float):
+    loss = 0
+    for observations, actions, targets in batch:
+        # Initial step, from the real observation.
+        network_output = network.initial_inference(observations)
+        hidden_state = network_output.hidden_state
+        predictions = [(1.0, network_output)]
+
+        # Recurrent steps, from action and previous hidden state.
+        for action in actions:
+            network_output = network.recurrent_inference(hidden_state, action)
+            hidden_state = network_output.hidden_state
+            predictions.append((1.0 / len(actions), network_output))
+
+            hidden_state = scale_gradient(hidden_state, 0.5)
+
+        for k, (prediction, target) in enumerate(zip(predictions, targets)):
+            gradient_scale, network_output = prediction
+            target_value, target_reward, target_policy = target
+            if target_policy:
+                p_logits = tf.stack(list(network_output.policy_logits.values()))
+                p_labels = tf.convert_to_tensor(target_policy)
+                policy_loss = tf.nn.softmax_cross_entropy_with_logits(logits=p_logits, labels=p_labels)
+
+                value_loss = scalar_loss(network_output.value, target_value)
+                reward_loss = 0.0
+
+                if k > 0:
+                    reward_loss = scalar_loss(network_output.reward, target_reward)
+
+                # loss += scale_gradient((value_loss * 0.25) + policy_loss + reward_loss, gradient_scale)
+                loss += scale_gradient((value_loss + policy_loss + reward_loss), gradient_scale)
+
+    loss /= len(batch)
+    for weights in network.get_weights():
+        loss += weight_decay * tf.nn.l2_loss(weights)
+
+    return loss
+
+
+@tf.function
+def update_weights(optimizer: tf.optimizers.Optimizer, network: Network, batch, weight_decay: float):
+    with tf.GradientTape() as tape:
+        loss = compute_loss(network, batch, weight_decay)
+
+    grad_g, grad_f, grad_h = tape.gradient(loss, network.get_variables())
+    opt = optimizer.apply_gradients(zip([grad_g, grad_f, grad_h], network.get_variables()))
+    opt.run()
+
+    network.increment_training_steps()
+    return loss
 
 
 ######### End Training ###########

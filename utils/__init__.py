@@ -24,8 +24,8 @@ class MinMaxStats(object):
         self.minimum = known_bounds.min if known_bounds else MAXIMUM_FLOAT_VALUE
 
     def update(self, value: float):
-        self.maximum = max(self.maximum, value)
-        self.minimum = min(self.minimum, value)
+        self.maximum = tf.math.maximum(self.maximum, value)
+        self.minimum = tf.math.minimum(self.minimum, value)
 
     def normalize(self, value: float) -> float:
         if self.maximum > self.minimum:
@@ -64,6 +64,7 @@ def inverse_atari_reward_transform(x: float, eps: float = 0.001) -> tf.Tensor:
     return tf.math.sign(x) * (((tf.math.sqrt(1. + 4. * eps * (tf.math.abs(x) + 1 + eps)) - 1) / (2 * eps)) ** 2 - 1)
 
 
+@tf.function
 def tf_scalar_to_support(x: tf.Tensor,
                          support_size: int,
                          reward_transformer: typing.Callable = atari_reward_transform, **kwargs) -> tf.Tensor:
@@ -88,6 +89,7 @@ def tf_scalar_to_support(x: tf.Tensor,
     return res
 
 
+@tf.function
 def tf_support_to_scalar(x: tf.Tensor, support_size: int,
                          inv_reward_transformer: typing.Callable = inverse_atari_reward_transform,
                          **kwargs) -> tf.Tensor:
