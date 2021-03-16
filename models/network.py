@@ -36,7 +36,7 @@ class Dynamics(Model, ABC):
                             # kernel_regularizer=self.regularizer,
                             name="g_hidden")
         self.s_k = Dense(hidden_state_size,
-                         activation=tf.nn.relu,
+                         activation=tf.nn.tanh,
                          # kernel_regularizer=self.regularizer,
                          name="g_s_k")
 
@@ -120,8 +120,8 @@ class Representation(Model, ABC):
                             # kernel_regularizer=self.regularizer,
                             name="h_hidden")
         self.s0 = Dense(observation_space_size,
-                        activation=tf.nn.relu,
-                        kernel_regularizer=self.regularizer,
+                        activation=tf.nn.tanh,
+                        # kernel_regularizer=self.regularizer,
                         name="h_s0")
 
     # @tf.function

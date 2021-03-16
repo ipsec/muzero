@@ -199,7 +199,7 @@ def make_atari_config() -> MuZeroConfig:
         discount=0.99,
         dirichlet_alpha=0.25,
         num_simulations=50,  # Number of future moves self-simulated
-        batch_size=512,
+        batch_size=32,
         td_steps=10,  # Number of steps in the future to take into account for calculating the target value
         num_actors=1,
         training_steps=1000000,
