@@ -27,26 +27,22 @@ class Dynamics(Model, ABC):
         self.support = 300
         self.regularizer = l2(1e-4)
         self.inputs = Dense(neurons,
-                            input_shape=(encoded_space_size,),
+                            # input_shape=(encoded_space_size,),
                             activation=tf.nn.relu,
-                            kernel_regularizer=self.regularizer,
+                            # kernel_regularizer=self.regularizer,
                             name="g_input")
         self.hidden = Dense(neurons,
                             activation=tf.nn.relu,
-                            kernel_regularizer=self.regularizer,
+                            # kernel_regularizer=self.regularizer,
                             name="g_hidden")
-        self.common = Dense(neurons,
-                            activation=tf.nn.relu,
-                            kernel_regularizer=self.regularizer,
-                            name="g_common")
         self.s_k = Dense(hidden_state_size,
                          activation=tf.nn.relu,
-                         kernel_regularizer=self.regularizer,
+                         # kernel_regularizer=self.regularizer,
                          name="g_s_k")
 
         self.r_k = Dense(self.support * 2 + 1,
                          activation=tf.nn.softmax,
-                         kernel_regularizer=self.regularizer,
+                         # kernel_regularizer=self.regularizer,
                          name="g_r_k")
 
     # @tf.function
@@ -58,7 +54,6 @@ class Dynamics(Model, ABC):
         """
         x = self.inputs(encoded_space)
         x = self.hidden(x)
-        x = self.common(x)
         s_k = self.s_k(x)
         r_k = self.r_k(x)
         return s_k, r_k
@@ -75,25 +70,21 @@ class Prediction(Model, ABC):
         self.support = 300
         self.regularizer = l2(1e-4)
         self.inputs = Dense(neurons,
-                            input_shape=(hidden_state_size,),
+                            # input_shape=(hidden_state_size,),
                             activation=tf.nn.relu,
-                            kernel_regularizer=self.regularizer,
+                            # kernel_regularizer=self.regularizer,
                             name="f_inputs")
         self.hidden = Dense(neurons,
                             activation=tf.nn.relu,
-                            kernel_regularizer=self.regularizer,
+                            # kernel_regularizer=self.regularizer,
                             name="f_hidden")
-        self.common = Dense(neurons,
-                            activation=tf.nn.relu,
-                            kernel_regularizer=self.regularizer,
-                            name="f_common")
         self.policy = Dense(action_state_size,
                             activation=tf.nn.softmax,
-                            kernel_regularizer=self.regularizer,
+                            # kernel_regularizer=self.regularizer,
                             name="f_policy")
         self.value = Dense(self.support * 2 + 1,
                            activation=tf.nn.softmax,
-                           kernel_regularizer=self.regularizer,
+                           # kernel_regularizer=self.regularizer,
                            name="f_value")
 
     # @tf.function
@@ -104,7 +95,6 @@ class Prediction(Model, ABC):
         """
         x = self.inputs(hidden_state)
         x = self.hidden(x)
-        x = self.common(x)
         policy = self.policy(x)
         value = self.value(x)
 
@@ -121,18 +111,14 @@ class Representation(Model, ABC):
         neurons = 20
         self.regularizer = l2(1e-4)
         self.inputs = Dense(neurons,
-                            input_shape=(observation_space_size,),
+                            # input_shape=(observation_space_size,),
                             activation=tf.nn.relu,
-                            kernel_regularizer=self.regularizer,
+                            # kernel_regularizer=self.regularizer,
                             name="h_inputs")
         self.hidden = Dense(neurons,
                             activation=tf.nn.relu,
-                            kernel_regularizer=self.regularizer,
+                            # kernel_regularizer=self.regularizer,
                             name="h_hidden")
-        self.common = Dense(neurons,
-                            activation=tf.nn.relu,
-                            kernel_regularizer=self.regularizer,
-                            name="h_common")
         self.s0 = Dense(observation_space_size,
                         activation=tf.nn.relu,
                         kernel_regularizer=self.regularizer,
@@ -146,7 +132,6 @@ class Representation(Model, ABC):
         """
         x = self.inputs(observation)
         x = self.hidden(x)
-        x = self.common(x)
         s_0 = self.s0(x)
         return s_0
 
