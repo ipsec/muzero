@@ -199,5 +199,8 @@ class Network(object):
     def increment_training_steps(self):
         self._training_steps += 1
 
+    def get_variables_by_network(self):
+        return [[x.trainable_variables] for x in [self.g_dynamics, self.f_prediction, self.h_representation]]
+
     def get_variables(self):
         return [x.trainable_variables for x in [self.g_dynamics, self.f_prediction, self.h_representation]]

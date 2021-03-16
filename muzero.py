@@ -182,12 +182,15 @@ def compute_loss(network: Network, batch, weight_decay: float):
 
 @tf.function
 def update_weights(optimizer: tf.optimizers.Optimizer, network: Network, batch, weight_decay: float):
-    with tf.GradientTape() as tape:
+    with tf.GradientTape() as f_tape, tf.GradientTape() as g_tape, tf.GradientTape() as h_tape:
         loss = compute_loss(network, batch, weight_decay)
 
-    grad_g, grad_f, grad_h = tape.gradient(loss, network.get_variables())
-    opt = optimizer.apply_gradients(zip([grad_g, grad_f, grad_h], network.get_variables()))
-    opt.run()
+    f_grad = f_tape.gradient(loss, network.f_prediction.trainable_variables)
+    g_grad = g_tape.gradient(loss, network.g_dynamics.trainable_variables)
+    h_grad = h_tape.gradient(loss, network.h_representation.trainable_variables)
+    optimizer.apply_gradients(zip(f_grad, network.f_prediction.trainable_variables))
+    optimizer.apply_gradients(zip(g_grad, network.g_dynamics.trainable_variables))
+    optimizer.apply_gradients(zip(h_grad, network.h_representation.trainable_variables))
 
     network.increment_training_steps()
     return loss
