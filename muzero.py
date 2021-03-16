@@ -161,13 +161,14 @@ def compute_loss(network: Network, batch, weight_decay: float):
             target_value, target_reward, target_policy = target
             policy_loss = tf.convert_to_tensor([[0.0]])
 
-            if policy_loss:
+            if target_policy:
+                # if tf.not_equal(tf.size(target_policy), 0):
                 p_logits = tf.stack(list(network_output.policy_logits.values()))
                 p_labels = tf.convert_to_tensor(target_policy)
                 policy_loss = tf.nn.softmax_cross_entropy_with_logits(logits=p_logits, labels=p_labels)
 
             value_loss = scalar_loss(network_output.value, target_value)
-            reward_loss = 0.0
+            reward_loss = tf.convert_to_tensor([[0.0]])
 
             if k > 0:
                 reward_loss = scalar_loss(network_output.reward, target_reward)
