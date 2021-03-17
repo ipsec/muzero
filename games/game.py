@@ -184,14 +184,6 @@ class ReplayBuffer(object):
 
 
 def make_atari_config() -> MuZeroConfig:
-    def visit_softmax_temperature(config: MuZeroConfig, num_moves, training_steps):
-        if training_steps < 500:
-            return 1.0
-        elif training_steps < 750:
-            return 0.5
-        else:
-            return 0.15
-
     return MuZeroConfig(
         state_space_size=4,
         action_space_size=2,
@@ -205,5 +197,5 @@ def make_atari_config() -> MuZeroConfig:
         training_steps=1000000,
         lr_init=0.05,
         lr_decay_steps=100,
-        lr_decay_rate=0.99,
-        visit_softmax_temperature_fn=visit_softmax_temperature)
+        lr_decay_rate=0.99)
+    # visit_softmax_temperature_fn=visit_softmax_temperature)

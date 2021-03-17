@@ -40,12 +40,12 @@ class Dynamics(Model, ABC):
                          # kernel_regularizer=self.regularizer,
                          name="g_s_k")
 
-        self.r_k = Dense(self.support * 2 + 1,
-                         activation=tf.nn.softmax,
+        self.r_k = Dense(1,
+                         # activation=tf.nn.softmax,
                          # kernel_regularizer=self.regularizer,
                          name="g_r_k")
 
-    # @tf.function
+    @tf.function
     def call(self, encoded_space, **kwargs):
         """
         :param **kwargs:
@@ -79,15 +79,15 @@ class Prediction(Model, ABC):
                             # kernel_regularizer=self.regularizer,
                             name="f_hidden")
         self.policy = Dense(action_state_size,
-                            activation=tf.nn.softmax,
+                            # activation=tf.nn.softmax,
                             # kernel_regularizer=self.regularizer,
                             name="f_policy")
-        self.value = Dense(self.support * 2 + 1,
-                           activation=tf.nn.softmax,
+        self.value = Dense(1,
+                           # activation=tf.nn.softmax,
                            # kernel_regularizer=self.regularizer,
                            name="f_value")
 
-    # @tf.function
+    @tf.function
     def call(self, hidden_state, **kwargs):
         """
         :param hidden_state
@@ -124,7 +124,7 @@ class Representation(Model, ABC):
                         # kernel_regularizer=self.regularizer,
                         name="h_s0")
 
-    # @tf.function
+    @tf.function
     def call(self, observation, **kwargs):
         """
         :param observation
@@ -155,8 +155,8 @@ class Network(object):
         p, v = self.f_prediction(s_0)
 
         return NetworkOutput(
-            value=tf_support_to_scalar(v, 300),
-            reward=tf.convert_to_tensor([[0.0]]),
+            value=v,
+            reward=0.0,
             policy_logits=NetworkOutput.build_policy_logits(policy_logits=p),
             hidden_state=s_0,
         )
@@ -173,8 +173,8 @@ class Network(object):
         p, v = self.f_prediction(s_k)
 
         return NetworkOutput(
-            value=tf_support_to_scalar(v, 300),
-            reward=tf_support_to_scalar(r_k, 300),
+            value=v,
+            reward=r_k,
             policy_logits=NetworkOutput.build_policy_logits(policy_logits=p),
             hidden_state=s_k
         )

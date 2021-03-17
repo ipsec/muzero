@@ -4,11 +4,9 @@
 # pylint: disable=missing-docstring
 # pylint: disable=g-explicit-length-test
 import logging
-from threading import Thread
 
 import numpy as np
 import tensorflow as tf
-from tensorflow.keras.losses import CategoricalCrossentropy
 from tensorflow.keras.optimizers import SGD
 # MuZero training is split into two independent parts: Network training and
 # self-play data generation.
@@ -26,10 +24,12 @@ from models.network import Network
 from storage import SharedStorage
 from summary import write_summary_loss
 from utils import MinMaxStats, tf_scalar_to_support
+from utils.exports import save_checkpoints, export_models
 
 FORMAT = '%(asctime)-15s %(clientip)s %(user)-8s %(message)s'
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)-15s %(threadName)s %(message)s')
+
 
 ##################################
 ####### Part 1: Self-Play ########
@@ -37,22 +37,16 @@ logging.basicConfig(level=logging.DEBUG, format='%(asctime)-15s %(threadName)s %
 # Each self-play job is independent of all others; it takes the latest network
 # snapshot, produces a game and makes it available to the training job by
 # writing it to a shared replay buffer.
-from utils.exports import save_checkpoints, export_models
-
-
-def run_selfplay_once(config: MuZeroConfig, storage: SharedStorage, replay_buffer: ReplayBuffer):
-    network = storage.latest_network()
-    game = play_game(config, network)
-    replay_buffer.save_game(game)
 
 
 def run_selfplay(config: MuZeroConfig, storage: SharedStorage, replay_buffer: ReplayBuffer):
-    # while True:
+    #while True:
     network = storage.latest_network()
     game = play_game(config, network)
     replay_buffer.save_game(game)
-    return np.mean([np.sum(game.rewards) for game in replay_buffer.buffer])
+    reward_mean = np.mean([np.sum(game.rewards) for game in replay_buffer.buffer])
     # logging.debug(f"Game Reward: {np.sum(game.rewards):.2f} - Mean: {reward_mean:.2f}")
+    return reward_mean
 
 
 # Each game is produced by starting at the initial board position, then
@@ -112,6 +106,7 @@ def train_network(config: MuZeroConfig,
             t.set_description(msg)
             t.update(1)
             t.refresh()
+
             if i % config.checkpoint_interval == 0:
                 storage.save_network(i, network)
                 save_checkpoints(storage.latest_network())
@@ -150,7 +145,7 @@ def scalar_loss(prediction, target):
 
 # @tf.function
 def compute_loss(network: Network, batch, weight_decay: float):
-    loss = 0
+    loss = []
     for observations, actions, targets in batch:
         # Initial step, from the real observation.
         network_output = network.initial_inference(observations)
@@ -182,17 +177,17 @@ def compute_loss(network: Network, batch, weight_decay: float):
             if k > 0:
                 reward_loss = scalar_loss(network_output.reward, target_reward)
 
-            loss += scale_gradient((value_loss * 0.25) + policy_loss + reward_loss, gradient_scale)
+            local_loss = tf.squeeze(scale_gradient((value_loss * 0.25) + policy_loss + reward_loss, gradient_scale))
+
+            loss.append(local_loss)
             # loss += scale_gradient((value_loss + policy_loss + reward_loss), gradient_scale)
 
-    loss /= len(batch)
-
-    return loss
+    return tf.reduce_mean(loss)
 
 
 def get_variables(network):
     parts = (network.f_prediction, network.g_dynamics, network.h_representation)
-    return [v for v_list in map(lambda n: n.weights, parts) for v in v_list]
+    return [v for v_list in map(lambda n: n.trainable_weights, parts) for v in v_list]
 
 
 def update_weights(optimizer: tf.optimizers.Optimizer, network: Network, batch, weight_decay: float):

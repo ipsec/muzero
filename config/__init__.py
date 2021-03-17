@@ -18,7 +18,7 @@ class MuZeroConfig(object):
                  lr_init: float,
                  lr_decay_steps: float,
                  lr_decay_rate: float,
-                 visit_softmax_temperature_fn,
+                 #visit_softmax_temperature_fn,
                  training_steps: int = 5000,
                  known_bounds: Optional[KnownBounds] = None):
 
@@ -27,7 +27,7 @@ class MuZeroConfig(object):
         self.action_space_size = action_space_size
         self.num_actors = num_actors
 
-        self.visit_softmax_temperature_fn = visit_softmax_temperature_fn
+        # self.visit_softmax_temperature_fn = visit_softmax_temperature_fn
         self.max_moves = max_moves
         self.num_simulations = num_simulations
         self.discount = discount
