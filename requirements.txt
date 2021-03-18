@@ -1,4 +1,4 @@
 box2d-py==2.3.8
 gym==0.18.0
 tensorflow==2.4.1
-tqdm==4.57.0
+tqdm==4.59.0

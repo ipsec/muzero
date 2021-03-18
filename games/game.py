@@ -3,6 +3,7 @@ from typing import List
 
 import gym
 import numpy as np
+from gym import Env
 
 from config import MuZeroConfig
 from summary import write_summary_score
@@ -183,19 +184,21 @@ class ReplayBuffer(object):
         # return np.random.choice(len(game.history))
 
 
-def make_atari_config() -> MuZeroConfig:
+def make_atari_config(env: Env) -> MuZeroConfig:
+
     return MuZeroConfig(
-        state_space_size=4,
-        action_space_size=2,
-        max_moves=1000,  # Half an hour at action repeat 4.
-        discount=0.99,
+        env=env,
+        state_space_size=int(np.prod(env.observation_space.shape)),
+        action_space_size=env.action_space.n,
+        max_moves=700,  # Half an hour at action repeat 4.
+        discount=0.997,
         dirichlet_alpha=0.25,
         num_simulations=50,  # Number of future moves self-simulated
-        batch_size=32,
+        batch_size=512,
         td_steps=10,  # Number of steps in the future to take into account for calculating the target value
         num_actors=1,
         training_steps=1000000,
-        lr_init=0.01,
+        lr_init=0.05,
         lr_decay_steps=100,
         lr_decay_rate=0.99)
     # visit_softmax_temperature_fn=visit_softmax_temperature)

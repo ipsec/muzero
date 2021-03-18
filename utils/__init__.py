@@ -54,24 +54,21 @@ class Node(object):
         return self.value_sum / self.visit_count
 
 
-@tf.function
 def atari_reward_transform(x: float, eps: float = 0.001) -> tf.Tensor:
     return tf.math.sign(x) * (tf.math.sqrt(tf.math.abs(x) + 1) - 1) + eps * x
 
 
-@tf.function
 def inverse_atari_reward_transform(x: float, eps: float = 0.001) -> tf.Tensor:
     return tf.math.sign(x) * (((tf.math.sqrt(1. + 4. * eps * (tf.math.abs(x) + 1 + eps)) - 1) / (2 * eps)) ** 2 - 1)
 
 
-@tf.function
 def tf_scalar_to_support(x: tf.Tensor,
                          support_size: int,
                          reward_transformer: typing.Callable = atari_reward_transform, **kwargs) -> tf.Tensor:
     if support_size == 0:  # Simple regression (support in this case can be the mean of a Gaussian)
         return x
 
-    x = reward_transformer(x, **kwargs)
+    # x = reward_transformer(x, **kwargs)
 
     transformed = tf.clip_by_value(x, -support_size, support_size - 1e-6)
     floored = tf.floor(transformed)
@@ -89,7 +86,6 @@ def tf_scalar_to_support(x: tf.Tensor,
     return res
 
 
-@tf.function
 def tf_support_to_scalar(x: tf.Tensor, support_size: int,
                          inv_reward_transformer: typing.Callable = inverse_atari_reward_transform,
                          **kwargs) -> tf.Tensor:
@@ -97,8 +93,8 @@ def tf_support_to_scalar(x: tf.Tensor, support_size: int,
         return x
 
     bins = tf.range(-support_size, support_size + 1, dtype=tf.float32)
-    y = tf.tensordot(tf.squeeze(x), tf.squeeze(bins), 1)
+    value = tf.tensordot(tf.squeeze(x), tf.squeeze(bins), 1)
 
-    value = inv_reward_transformer(y, **kwargs)
+    # value = inv_reward_transformer(value, **kwargs)
 
     return value

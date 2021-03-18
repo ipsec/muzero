@@ -4,7 +4,9 @@
 # pylint: disable=missing-docstring
 # pylint: disable=g-explicit-length-test
 import logging
+from threading import Thread
 
+import gym
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras.optimizers import SGD
@@ -40,13 +42,10 @@ logging.basicConfig(level=logging.DEBUG, format='%(asctime)-15s %(threadName)s %
 
 
 def run_selfplay(config: MuZeroConfig, storage: SharedStorage, replay_buffer: ReplayBuffer):
-    # while True:
-    network = storage.latest_network()
-    game = play_game(config, network)
-    replay_buffer.save_game(game)
-    reward_mean = np.mean([np.sum(game.rewards) for game in replay_buffer.buffer])
-    # logging.debug(f"Game Reward: {np.sum(game.rewards):.2f} - Mean: {reward_mean:.2f}")
-    return reward_mean
+    while True:
+        network = storage.latest_network()
+        game = play_game(config, network)
+        replay_buffer.save_game(game)
 
 
 # Each game is produced by starting at the initial board position, then
@@ -95,13 +94,13 @@ def train_network(config: MuZeroConfig,
     )
     # optimizer = Adam(learning_rate=lr_schedule)
     # optimizer = Adam(learning_rate=config.lr_init)
-    optimizer = SGD(learning_rate=config.lr_init, momentum=config.momentum)
-    # optimizer = SGD(learning_rate=lr_schedule, momentum=config.momentum)
+    # optimizer = SGD(learning_rate=config.lr_init, momentum=config.momentum)
+    optimizer = SGD(learning_rate=0.001, momentum=0.1)
 
     with trange(config.training_steps) as t:
         for i in t:
-            reward_mean = run_selfplay(config, storage, replay_buffer)
-            msg = f"Reward mean: {reward_mean:05.2f}"
+            reward_mean = np.mean([np.sum(game.rewards) for game in replay_buffer.buffer])
+            msg = f"Games: {len(replay_buffer.buffer):05d} - Reward mean: {reward_mean:05.2f}"
 
             t.set_description(msg)
             t.update(1)
@@ -131,16 +130,16 @@ def scalar_loss(prediction, target):
     target = tf.convert_to_tensor([[target]], dtype=tf.float32)
     prediction = tf.convert_to_tensor([[prediction]], dtype=tf.float32)
 
-    # target = tf_scalar_to_support(target, 300)
-    # prediction = tf_scalar_to_support(prediction, 300)
+    target = tf_scalar_to_support(target, 300)
+    prediction = tf_scalar_to_support(prediction, 300)
     # return tf.reduce_sum(-target * tf.nn.log_softmax(prediction))
     # cce = CategoricalCrossentropy(from_logits=True)
     # return cce(target, prediction)
     # return tf.cast(tf.nn.softmax_cross_entropy_with_logits(logits=prediction, labels=target), dtype=tf.float32)
     # target = tf.math.sign(target) * (tf.math.sqrt(tf.math.abs(target) + 1) - 1) + 0.001 * target
-    return tf.reduce_sum(tf.keras.losses.MSE(y_true=target, y_pred=prediction))
+    # return tf.reduce_sum(tf.keras.losses.MSE(y_true=target, y_pred=prediction))
     # return tf.cast(tf.reduce_sum(-tf.nn.log_softmax(prediction, axis=-1) * target), dtype=tf.float32)
-    # return tf.reduce_sum(tf.nn.softmax_cross_entropy_with_logits(target, prediction))
+    return tf.reduce_sum(tf.nn.softmax_cross_entropy_with_logits(target, prediction))
 
 
 # @tf.function
@@ -215,11 +214,18 @@ def muzero(config: MuZeroConfig):
     storage = SharedStorage(config)
     replay_buffer = ReplayBuffer(config)
 
+    thread = Thread(target=run_selfplay, args=(config, storage, replay_buffer))
+    thread.start()
+
+    while len(replay_buffer.buffer) == 0:
+        pass
+
     train_network(config, storage, replay_buffer)
     export_models(storage.latest_network())
 
 
 if __name__ == "__main__":
     with tf.device('/device:GPU:0'):
-        config = make_atari_config()
+        env = gym.make('CartPole-v1')
+        config = make_atari_config(env)
         muzero(config)

@@ -1,11 +1,14 @@
 from typing import Optional
 
+from gym import Env
+
 from utils import KnownBounds
 
 
 class MuZeroConfig(object):
 
     def __init__(self,
+                 env: Env,
                  state_space_size: int,
                  action_space_size: int,
                  max_moves: int,
@@ -21,6 +24,9 @@ class MuZeroConfig(object):
                  # visit_softmax_temperature_fn,
                  training_steps: int = 5000,
                  known_bounds: Optional[KnownBounds] = None):
+        # Environment
+        self.env = env
+
         # Self-Play
         self.state_space_size = state_space_size
         self.action_space_size = action_space_size
@@ -48,8 +54,8 @@ class MuZeroConfig(object):
         # Training
         self.training_steps = training_steps
         self.epochs = 5000
-        self.checkpoint_interval = 10
-        self.window_size = 10000
+        self.checkpoint_interval = 500
+        self.window_size = 125000
         self.batch_size = batch_size
         self.num_unroll_steps = 5
         self.td_steps = td_steps
