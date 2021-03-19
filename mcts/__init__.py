@@ -37,15 +37,22 @@ def run_mcts(config: MuZeroConfig, root: Node, action_history: ActionHistory,
                       config.discount, min_max_stats)
 
 
+def visit_softmax_temperature(training_steps):
+    if training_steps < 500:
+        return 1.0
+    elif training_steps < 750:
+        return 0.5
+    else:
+        return 0.15
+
+
 def select_action(config: MuZeroConfig, num_moves: int, node: Node,
                   network: Network):
     visit_counts = [
         (child.visit_count, action) for action, child in node.children.items()
     ]
-    t = config.visit_softmax_temperature_fn(
-        config=config,
-        num_moves=num_moves,
-        training_steps=network.training_steps_counter())
+
+    t = visit_softmax_temperature(network.training_steps_counter())
     return softmax_sample(visit_counts, t)
 
 

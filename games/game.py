@@ -3,6 +3,7 @@ from typing import List
 
 import gym
 import numpy as np
+from gym import Env
 
 from config import MuZeroConfig
 from summary import write_summary_score
@@ -72,7 +73,7 @@ class Game(object):
         self.rewards = []
         self.child_visits = []
         self.root_values = []
-        self.action_space_size = action_space_size
+        self.action_space_size = self.env.action_space.n
         self.discount = discount
         self.actions = list(map(lambda i: Action(i), range(self.env.action_space.n)))
         self.done = False
@@ -174,36 +175,30 @@ class ReplayBuffer(object):
 
     def sample_game(self) -> Game:
         # Sample game from buffer either uniformly or according to some priority.
-        return random.choice(self.buffer)
-        # return np.random.choice(self.buffer)
+        # return random.choice(self.buffer)
+        return np.random.choice(self.buffer)
 
     def sample_position(self, game) -> int:
         # Sample position from game either uniformly or according to some priority.
-        return random.randrange(len(game.history))
-        # return np.random.choice(len(game.history))
+        # return random.randrange(len(game.history))
+        return np.random.choice(len(game.history))
 
 
-def make_atari_config() -> MuZeroConfig:
-    def visit_softmax_temperature(config: MuZeroConfig, num_moves, training_steps):
-        if training_steps < 500:
-            return 1.0
-        elif training_steps < 750:
-            return 0.5
-        else:
-            return 0.15
+def make_atari_config(env: Env) -> MuZeroConfig:
 
     return MuZeroConfig(
-        state_space_size=4,
-        action_space_size=2,
-        max_moves=1000,  # Half an hour at action repeat 4.
-        discount=0.99,
+        env=env,
+        state_space_size=int(np.prod(env.observation_space.shape)),
+        action_space_size=env.action_space.n,
+        max_moves=700,  # Half an hour at action repeat 4.
+        discount=0.997,
         dirichlet_alpha=0.25,
-        num_simulations=15,  # Number of future moves self-simulated
+        num_simulations=50,  # Number of future moves self-simulated
         batch_size=128,
         td_steps=10,  # Number of steps in the future to take into account for calculating the target value
         num_actors=1,
-        training_steps=10000,
-        lr_init=0.01,
+        training_steps=1000000,
+        lr_init=0.001,
         lr_decay_steps=100,
-        lr_decay_rate=0.96,
-        visit_softmax_temperature_fn=visit_softmax_temperature)
+        lr_decay_rate=0.1)
+    # visit_softmax_temperature_fn=visit_softmax_temperature)
