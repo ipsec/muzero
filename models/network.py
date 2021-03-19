@@ -16,6 +16,13 @@ def scale(t: tf.Tensor):
     return (t - tf.reduce_min(t)) / (tf.reduce_max(t) - tf.reduce_min(t))
 
 
+def scale_state(state):
+    _min = state.min()
+    _max = state.max()
+    state = (state - _min) / (_max - _min)
+    return state
+
+
 class Dynamics(Model, ABC):
     def __init__(self, hidden_state_size: int, enc_space_size: int):
         """
@@ -23,12 +30,11 @@ class Dynamics(Model, ABC):
         :param enc_space_size: size of hidden state
         """
         super(Dynamics, self).__init__()
-        neurons = 512
-        self.inputs = Dense(enc_space_size, input_shape=(enc_space_size,), name="g_input", activation=tf.nn.relu)
-        self.hidden1 = Dense(neurons, name="g_hidden1", activation=tf.nn.relu)
-        self.hidden2 = Dense(neurons, name="g_hidden2", activation=tf.nn.relu)
-        self.s_k = Dense(hidden_state_size, name="g_s_k", activation=tf.nn.relu)
-        self.r_k = Dense(601, name="g_r_k", activation='linear')
+        neurons = 64
+        self.inputs = Dense(enc_space_size, input_shape=(enc_space_size,), name="g_input", activation=tf.nn.leaky_relu)
+        self.hidden = Dense(neurons, name="g_hidden1", activation=tf.nn.leaky_relu)
+        self.s_k = Dense(hidden_state_size, name="g_s_k", activation=tf.nn.leaky_relu)
+        self.r_k = Dense(601, name="g_r_k")
 
     @tf.function
     def call(self, encoded_space, **kwargs):
@@ -38,8 +44,7 @@ class Dynamics(Model, ABC):
         :return: NetworkOutput with reward (r^k) and hidden state (s^k)
         """
         x = self.inputs(encoded_space)
-        x = self.hidden1(x)
-        x = self.hidden2(x)
+        x = self.hidden(x)
         s_k = self.s_k(x)
         r_k = self.r_k(x)
         return s_k, r_k
@@ -52,10 +57,10 @@ class Prediction(Model, ABC):
         :param action_state_size: size of action state
         """
         super(Prediction, self).__init__()
-        neurons = 512
-        self.inputs = Dense(hidden_state_size, input_shape=(hidden_state_size,), name="f_inputs", activation=tf.nn.relu)
-        self.hidden1 = Dense(neurons, name="f_hidden1", activation=tf.nn.relu)
-        self.hidden2 = Dense(neurons, name="f_hidden2", activation=tf.nn.relu)
+        neurons = 64
+        self.inputs = Dense(hidden_state_size, input_shape=(hidden_state_size,), name="f_inputs",
+                            activation=tf.nn.leaky_relu)
+        self.hidden = Dense(neurons, name="f_hidden2", activation=tf.nn.leaky_relu)
         self.policy = Dense(action_state_size, name="f_policy")
         self.value = Dense(601, name="f_value")
 
@@ -66,8 +71,7 @@ class Prediction(Model, ABC):
         :return: NetworkOutput with policy logits and value
         """
         x = self.inputs(hidden_state)
-        x = self.hidden1(x)
-        x = self.hidden2(x)
+        x = self.hidden(x)
         policy = self.policy(x)
         value = self.value(x)
 
@@ -81,11 +85,10 @@ class Representation(Model, ABC):
         :param obs_space_size
         """
         super(Representation, self).__init__()
-        neurons = 512
-        self.inputs = Dense(obs_space_size, input_shape=(obs_space_size,), name="h_inputs", activation=tf.nn.relu)
-        self.hidden1 = Dense(neurons, name="h_hidden1", activation=tf.nn.relu)
-        self.hidden2 = Dense(neurons, name="h_hidden2", activation=tf.nn.relu)
-        self.s0 = Dense(obs_space_size, name="h_s0", activation=tf.nn.relu)
+        neurons = 64
+        self.inputs = Dense(obs_space_size, input_shape=(obs_space_size,), name="h_inputs", activation=tf.nn.leaky_relu)
+        self.hidden = Dense(neurons, name="h_hidden1", activation=tf.nn.leaky_relu)
+        self.s0 = Dense(obs_space_size, name="h_s0", activation=tf.nn.leaky_relu)
 
     @tf.function
     def call(self, observation, **kwargs):
@@ -94,8 +97,7 @@ class Representation(Model, ABC):
         :return: state s0
         """
         x = self.inputs(observation)
-        x = self.hidden1(x)
-        x = self.hidden2(x)
+        x = self.hidden(x)
         s_0 = self.s0(x)
         return s_0
 
@@ -113,6 +115,8 @@ class Network(object):
 
         # representation
         observation = tf.expand_dims(observation, 0)
+        observation = scale(observation)
+        observation = tf.cast(observation, dtype=tf.float32)
         s_0 = self.h_representation(observation)
         s_0 = scale(s_0)
 

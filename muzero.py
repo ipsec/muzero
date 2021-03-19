@@ -9,7 +9,7 @@ from threading import Thread
 import gym
 import numpy as np
 import tensorflow as tf
-from tensorflow.keras.optimizers import SGD
+from tensorflow.keras.optimizers import Adam
 # MuZero training is split into two independent parts: Network training and
 # self-play data generation.
 # These two parts only communicate by transferring the latest network checkpoint
@@ -95,7 +95,9 @@ def train_network(config: MuZeroConfig,
     # optimizer = Adam(learning_rate=lr_schedule)
     # optimizer = Adam(learning_rate=config.lr_init)
     # optimizer = SGD(learning_rate=config.lr_init, momentum=config.momentum)
-    optimizer = SGD(learning_rate=0.001, momentum=0.1)
+    # optimizer = SGD(learning_rate=lr_schedule, momentum=0.9)
+    # optimizer = SGD(learning_rate=0.0001, momentum=0.1)
+    optimizer = Adam(learning_rate=0.0001)
 
     with trange(config.training_steps) as t:
         for i in t:
@@ -125,29 +127,22 @@ def scale_gradient(tensor, scale):
 
 # @tf.function
 def scalar_loss(prediction, target):
-    # target = tf.constant(target, dtype=tf.float32, shape=(1, 1))
-    # prediction = tf.constant(prediction, dtype=tf.float32, shape=(1, 1))
-    target = tf.convert_to_tensor([[target]], dtype=tf.float32)
-    prediction = tf.convert_to_tensor([[prediction]], dtype=tf.float32)
+    target = np.atleast_2d(target)
+    prediction = np.atleast_2d(prediction)
 
     target = tf_scalar_to_support(target, 300)
     prediction = tf_scalar_to_support(prediction, 300)
-    # return tf.reduce_sum(-target * tf.nn.log_softmax(prediction))
-    # cce = CategoricalCrossentropy(from_logits=True)
-    # return cce(target, prediction)
-    # return tf.cast(tf.nn.softmax_cross_entropy_with_logits(logits=prediction, labels=target), dtype=tf.float32)
-    # target = tf.math.sign(target) * (tf.math.sqrt(tf.math.abs(target) + 1) - 1) + 0.001 * target
-    # return tf.reduce_sum(tf.keras.losses.MSE(y_true=target, y_pred=prediction))
-    # return tf.cast(tf.reduce_sum(-tf.nn.log_softmax(prediction, axis=-1) * target), dtype=tf.float32)
-    return tf.reduce_sum(tf.nn.softmax_cross_entropy_with_logits(target, prediction))
+
+    res = tf.cast(tf.reduce_sum(-target * tf.nn.log_softmax(prediction)), dtype=tf.float32)
+    return res
 
 
 # @tf.function
 def compute_loss(network: Network, batch, weight_decay: float):
-    loss = []
-    for observations, actions, targets in batch:
+    loss = 0
+    for image, actions, targets in batch:
         # Initial step, from the real observation.
-        network_output = network.initial_inference(observations)
+        network_output = network.initial_inference(image)
         hidden_state = network_output.hidden_state
         predictions = [(1.0, network_output)]
 
@@ -162,26 +157,24 @@ def compute_loss(network: Network, batch, weight_decay: float):
         for k, (prediction, target) in enumerate(zip(predictions, targets)):
             gradient_scale, network_output = prediction
             target_value, target_reward, target_policy = target
-            policy_loss = tf.convert_to_tensor([[0.0]])
 
-            if target_policy:
-                # if tf.not_equal(tf.size(target_policy), 0):
-                p_logits = tf.stack(list(network_output.policy_logits.values()))
-                p_labels = tf.convert_to_tensor(target_policy)
-                policy_loss = tf.nn.softmax_cross_entropy_with_logits(logits=p_logits, labels=p_labels)
+            if not target_policy:  # How to treat absorbing states? Just pass?
+                continue
 
-            value_loss = scalar_loss(network_output.value, target_value)
-            reward_loss = tf.convert_to_tensor([[0.0]])
+            l = tf.nn.softmax_cross_entropy_with_logits(
+                logits=tf.stack(list(network_output.policy_logits.values())), labels=target_policy)
 
+            l += scalar_loss(network_output.value, target_value)
             if k > 0:
-                reward_loss = scalar_loss(network_output.reward, target_reward)
+                l += scalar_loss(network_output.reward, target_reward)
 
-            local_loss = tf.squeeze(scale_gradient((value_loss * 0.25) + policy_loss + reward_loss, gradient_scale))
+            loss += scale_gradient(l, gradient_scale)
+    loss /= len(batch)
 
-            loss.append(local_loss)
-            # loss += scale_gradient((value_loss + policy_loss + reward_loss), gradient_scale)
+    for weights in network.get_weights():
+        loss += weight_decay * tf.nn.l2_loss(weights)
 
-    return tf.reduce_mean(loss)
+    return loss
 
 
 def get_variables(network):

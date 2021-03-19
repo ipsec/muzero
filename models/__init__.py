@@ -13,8 +13,4 @@ class NetworkOutput:
 
     @staticmethod
     def build_policy_logits(policy_logits):
-        res = {}
-        for i in range(len(policy_logits[0])):
-            res[Action(i)] = policy_logits[0][i]
-        return res
-        #return {Action(i): logit for i, logit in enumerate(policy_logits[0])}
+        return {Action(i): logit for i, logit in enumerate(policy_logits[0])}

@@ -73,7 +73,7 @@ class Game(object):
         self.rewards = []
         self.child_visits = []
         self.root_values = []
-        self.action_space_size = action_space_size
+        self.action_space_size = self.env.action_space.n
         self.discount = discount
         self.actions = list(map(lambda i: Action(i), range(self.env.action_space.n)))
         self.done = False
@@ -175,13 +175,13 @@ class ReplayBuffer(object):
 
     def sample_game(self) -> Game:
         # Sample game from buffer either uniformly or according to some priority.
-        return random.choice(self.buffer)
-        # return np.random.choice(self.buffer)
+        # return random.choice(self.buffer)
+        return np.random.choice(self.buffer)
 
     def sample_position(self, game) -> int:
         # Sample position from game either uniformly or according to some priority.
-        return random.randrange(len(game.history))
-        # return np.random.choice(len(game.history))
+        # return random.randrange(len(game.history))
+        return np.random.choice(len(game.history))
 
 
 def make_atari_config(env: Env) -> MuZeroConfig:
@@ -194,11 +194,11 @@ def make_atari_config(env: Env) -> MuZeroConfig:
         discount=0.997,
         dirichlet_alpha=0.25,
         num_simulations=50,  # Number of future moves self-simulated
-        batch_size=512,
+        batch_size=128,
         td_steps=10,  # Number of steps in the future to take into account for calculating the target value
         num_actors=1,
         training_steps=1000000,
-        lr_init=0.05,
+        lr_init=0.001,
         lr_decay_steps=100,
-        lr_decay_rate=0.99)
+        lr_decay_rate=0.1)
     # visit_softmax_temperature_fn=visit_softmax_temperature)
