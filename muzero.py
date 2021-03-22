@@ -17,7 +17,7 @@ from tensorflow.keras.optimizers import Adam
 # to the training.
 # from tqdm import trange
 from tensorflow.python.keras.optimizer_v2.learning_rate_schedule import ExponentialDecay
-from tqdm import trange
+from tqdm.notebook import trange
 
 from config import MuZeroConfig
 from games.game import ReplayBuffer, Game, make_atari_config
@@ -52,7 +52,6 @@ def write_summary_score(step):
         tf.summary.scalar("Score Current", train_score_current.result(), step)
         tf.summary.scalar("Score Mean", train_score_mean.result(), step)
         tf.summary.scalar("Loss Mean", train_loss.result(), step)
-        print(train_score_mean.result())
         train_score_current.reset_states()
 
 
@@ -119,7 +118,7 @@ def train_network(config: MuZeroConfig,
     # optimizer = SGD(learning_rate=0.001, momentum=0.9)
     # optimizer = Adam(learning_rate=0.001)
 
-    for i in trange(config.training_steps, desc=f'Training'):
+    for i in trange(config.training_steps, desc=f"Training - Score Mean: {float(train_score_mean.result()):.2f}"):
 
         for i in trange(config.num_actors, desc='Running Games', leave=False):
             run_selfplay(config, storage, replay_buffer)
