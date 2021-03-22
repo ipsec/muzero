@@ -59,9 +59,16 @@ def select_action(config: MuZeroConfig, num_moves: int, node: Node,
 # Select the child with the highest UCB score.
 def select_child(config: MuZeroConfig, node: Node,
                  min_max_stats: MinMaxStats):
+
     _, action, child = max(
         (ucb_score(config, node, child, min_max_stats), action,
          child) for action, child in node.children.items())
+
+    if node.visit_count == 0:
+        action = np.argmax([child.prior for child in node.children])
+
+    child = node.children[action]
+
     return action, child
 
 

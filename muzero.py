@@ -4,7 +4,7 @@
 # pylint: disable=missing-docstring
 # pylint: disable=g-explicit-length-test
 import logging
-from threading import Thread
+from pathlib import Path
 
 import gym
 import numpy as np
@@ -24,13 +24,15 @@ from games.game import ReplayBuffer, Game, make_atari_config
 from mcts import Node, expand_node, backpropagate, add_exploration_noise, run_mcts, select_action
 from models.network import Network
 from storage import SharedStorage
-from summary import write_summary_loss
 from utils import MinMaxStats, tf_scalar_to_support
 from utils.exports import save_checkpoints, export_models
 
 FORMAT = '%(asctime)-15s %(clientip)s %(user)-8s %(message)s'
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)-15s %(threadName)s %(message)s')
+train_loss = tf.keras.metrics.Mean('train_loss', dtype=tf.float32)
+train_score_mean = tf.keras.metrics.Mean('train_score_mean', dtype=tf.float32)
+train_score_current = tf.keras.metrics.Mean('train_score_current', dtype=tf.float32)
 
 
 ##################################
@@ -40,19 +42,35 @@ logging.basicConfig(level=logging.DEBUG, format='%(asctime)-15s %(threadName)s %
 # snapshot, produces a game and makes it available to the training job by
 # writing it to a shared replay buffer.
 
+data_path = Path("./data/muzero")
+data_path.mkdir(parents=True, exist_ok=True)
+summary_writer = tf.summary.create_file_writer(str(data_path) + "/summary/")
+
+
+def write_summary_score(step):
+    with summary_writer.as_default():
+        tf.summary.scalar("Score Current", train_score_current.result(), step)
+        tf.summary.scalar("Score Mean", train_score_mean.result(), step)
+        tf.summary.scalar("Loss Mean", train_loss.result(), step)
+        print(train_score_mean.result())
+        train_score_current.reset_states()
+
 
 def run_selfplay(config: MuZeroConfig, storage: SharedStorage, replay_buffer: ReplayBuffer):
-    while True:
-        network = storage.latest_network()
-        game = play_game(config, network)
-        replay_buffer.save_game(game)
+    # while True:
+
+    network = storage.latest_network()
+    game = play_game(config, network)
+    train_score_mean(tf.reduce_sum(game.rewards))
+    train_score_current(tf.reduce_sum(game.rewards))
+    replay_buffer.save_game(game)
 
 
 # Each game is produced by starting at the initial board position, then
 # repeatedly executing a Monte Carlo Tree Search to generate moves until the end
 # of the game is reached.
 def play_game(config: MuZeroConfig, network: Network) -> Game:
-    game = Game(config.action_space_size, config.discount)
+    game = Game(config.discount)
 
     while not game.terminal() and len(game.history) < config.max_moves:
         min_max_stats = MinMaxStats(config.known_bounds)
@@ -86,46 +104,43 @@ def play_game(config: MuZeroConfig, network: Network) -> Game:
 def train_network(config: MuZeroConfig,
                   storage: SharedStorage,
                   replay_buffer: ReplayBuffer):
-    network = storage.latest_network()
+
+    network = Network(config)
+
     lr_schedule = ExponentialDecay(
         initial_learning_rate=config.lr_init,
         decay_steps=config.lr_decay_steps,
         decay_rate=config.lr_decay_rate
     )
-    # optimizer = Adam(learning_rate=lr_schedule)
+    optimizer = Adam(learning_rate=lr_schedule)
     # optimizer = Adam(learning_rate=config.lr_init)
     # optimizer = SGD(learning_rate=config.lr_init, momentum=config.momentum)
     # optimizer = SGD(learning_rate=lr_schedule, momentum=0.9)
-    # optimizer = SGD(learning_rate=0.0001, momentum=0.1)
-    optimizer = Adam(learning_rate=0.0001)
+    # optimizer = SGD(learning_rate=0.001, momentum=0.9)
+    # optimizer = Adam(learning_rate=0.001)
 
-    with trange(config.training_steps) as t:
-        for i in t:
-            reward_mean = np.mean([np.sum(game.rewards) for game in replay_buffer.buffer])
-            msg = f"Games: {len(replay_buffer.buffer):05d} - Reward mean: {reward_mean:05.2f}"
+    for i in trange(config.training_steps, desc=f'Training'):
 
-            t.set_description(msg)
-            t.update(1)
-            t.refresh()
+        for i in trange(config.num_actors, desc='Running Games', leave=False):
+            run_selfplay(config, storage, replay_buffer)
 
-            if i % config.checkpoint_interval == 0:
-                storage.save_network(i, network)
-                save_checkpoints(storage.latest_network())
-            batch = replay_buffer.sample_batch(config.num_unroll_steps, config.td_steps)
-            loss = update_weights(optimizer, network, batch, config.weight_decay)
-            write_summary_loss(float(loss), network.training_steps_counter())
-            # logging.debug(f"Step: {network.training_steps_counter():05d} - Loss: {float(loss):.2f}")
+        if i % config.checkpoint_interval == 0:
+            storage.save_network(i, network)
+            save_checkpoints(network)
+
+        batch = replay_buffer.sample_batch(config.num_unroll_steps, config.td_steps)
+        loss = update_weights(optimizer, network, batch, config.weight_decay)
+        train_loss(loss)
+        write_summary_score(i)
 
     storage.save_network(config.training_steps, network)
 
 
-# @tf.function
 def scale_gradient(tensor, scale):
     """Scales the gradient for the backward pass."""
     return tensor * scale + tf.stop_gradient(tensor) * (1 - scale)
 
 
-# @tf.function
 def scalar_loss(prediction, target):
     target = np.atleast_2d(target)
     prediction = np.atleast_2d(prediction)
@@ -137,7 +152,6 @@ def scalar_loss(prediction, target):
     return res
 
 
-# @tf.function
 def compute_loss(network: Network, batch, weight_decay: float):
     loss = 0
     for image, actions, targets in batch:
@@ -186,6 +200,7 @@ def update_weights(optimizer: tf.optimizers.Optimizer, network: Network, batch, 
     with tf.GradientTape() as tape:
         loss = compute_loss(network, batch, weight_decay)
 
+    train_loss(loss)
     grads = tape.gradient(loss, get_variables(network))
     optimizer.apply_gradients(zip(grads, get_variables(network)))
 
@@ -207,18 +222,11 @@ def muzero(config: MuZeroConfig):
     storage = SharedStorage(config)
     replay_buffer = ReplayBuffer(config)
 
-    thread = Thread(target=run_selfplay, args=(config, storage, replay_buffer))
-    thread.start()
-
-    while len(replay_buffer.buffer) == 0:
-        pass
-
     train_network(config, storage, replay_buffer)
     export_models(storage.latest_network())
 
 
 if __name__ == "__main__":
-    with tf.device('/device:GPU:0'):
-        env = gym.make('CartPole-v1')
-        config = make_atari_config(env)
-        muzero(config)
+    env = gym.make('CartPole-v1')
+    config = make_atari_config(env)
+    muzero(config)

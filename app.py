@@ -1,19 +1,20 @@
 import logging
+from multiprocessing import Pool, cpu_count
 from pathlib import Path
-from threading import Thread
 
+import gym
 import numpy as np
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from tensorflow.keras.optimizers import Adam
 
 from games.game import make_atari_config, ReplayBuffer
-from muzero import play_game, train_network, save_checkpoints
+from muzero import update_weights, run_selfplay
 from storage import SharedStorage
+
 # get root logger
-from summary import write_summary_score
 
 log = logging.getLogger(__name__)
 
@@ -27,29 +28,45 @@ Path.mkdir(TEMPLATES_PATH, parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory=STATIC_PATH), name="static")
 templates = Jinja2Templates(directory=TEMPLATES_PATH)
 
-muzero_config = make_atari_config()
+env = gym.make('CartPole-v1')
+
+muzero_config = make_atari_config(env=env)
 storage = SharedStorage(muzero_config)
 replay_buffer = ReplayBuffer(muzero_config)
-optimizer = Adam(learning_rate=0.01)
+optimizer = Adam(learning_rate=0.0001)
+
+
+def play_game():
+    run_selfplay(muzero_config, storage, replay_buffer)
+
+
+def train(network):
+    batch = replay_buffer.sample_batch(muzero_config.num_unroll_steps, muzero_config.td_steps)
+    update_weights(optimizer, network, batch, muzero_config.weight_decay)
+
 
 @app.get('/')
-def root():
+async def root():
+    return {"success": True}
+
+
+@app.post('/config/reload')
+async def config_reload(game: str = 'CartPole-v1'):
+    env = gym.make(game)
+    muzero_config = make_atari_config(env=env)
     return {"success": True}
 
 
 @app.post('/train')
-async def train():
-    count = 0
-    while True:
-        for _ in range(muzero_config.num_games):
-            game = play_game(muzero_config, storage.latest_network())
-            write_summary_score(count, np.sum(game.rewards))
-            replay_buffer.save_game(game)
-            count += 1
+async def train_network(background_tasks: BackgroundTasks):
+    network = storage.latest_network()
+    for i in range(muzero_config.training_steps):
+        background_tasks.add_task(play_game)
+        if i % muzero_config.checkpoint_interval == 0:
+            storage.save_network(i, network)
+        background_tasks.add_task(train, network)
 
-        if len(replay_buffer.buffer) >= muzero_config.batch_size:
-            train_network(muzero_config, storage, replay_buffer, optimizer)
-            save_checkpoints(storage.latest_network())
+    storage.save_network(muzero_config.training_steps, network)
 
     return {"success": True}
 
