@@ -4,7 +4,9 @@
 # pylint: disable=missing-docstring
 # pylint: disable=g-explicit-length-test
 import logging
+from multiprocessing import Pool, cpu_count
 from pathlib import Path
+from threading import Thread
 
 import gym
 import numpy as np
@@ -15,9 +17,8 @@ from tensorflow.keras.optimizers import Adam
 # These two parts only communicate by transferring the latest network checkpoint
 # from the training to the self-play, and the finished games from the self-play
 # to the training.
-# from tqdm import trange
 from tensorflow.python.keras.optimizer_v2.learning_rate_schedule import ExponentialDecay
-from tqdm.notebook import trange
+from tqdm import trange
 
 from config import MuZeroConfig
 from games.game import ReplayBuffer, Game, make_atari_config
@@ -25,7 +26,7 @@ from mcts import Node, expand_node, backpropagate, add_exploration_noise, run_mc
 from models.network import Network
 from storage import SharedStorage
 from utils import MinMaxStats, tf_scalar_to_support
-from utils.exports import save_checkpoints, export_models
+from utils.exports import save_checkpoints, export_models, load_checkpoints
 
 FORMAT = '%(asctime)-15s %(clientip)s %(user)-8s %(message)s'
 
@@ -33,7 +34,6 @@ logging.basicConfig(level=logging.DEBUG, format='%(asctime)-15s %(threadName)s %
 train_loss = tf.keras.metrics.Mean('train_loss', dtype=tf.float32)
 train_score_mean = tf.keras.metrics.Mean('train_score_mean', dtype=tf.float32)
 train_score_current = tf.keras.metrics.Mean('train_score_current', dtype=tf.float32)
-
 
 ##################################
 ####### Part 1: Self-Play ########
@@ -55,21 +55,29 @@ def write_summary_score(step):
         train_score_current.reset_states()
 
 
-def run_selfplay(config: MuZeroConfig, storage: SharedStorage, replay_buffer: ReplayBuffer):
-    # while True:
+def run_selfplay(config: MuZeroConfig, replay_buffer: ReplayBuffer):
+    with Pool(2) as pool:
+        while True:
+            results = [pool.apply_async(func=play_game, args=(config, )) for i in range(config.num_actors)]
+            for p in results:
+                game = p.get()
+                replay_buffer.save_game(game)
+                train_score_mean(tf.reduce_sum(game.rewards))
+                train_score_current(tf.reduce_sum(game.rewards))
 
-    network = storage.latest_network()
-    game = play_game(config, network)
-    train_score_mean(tf.reduce_sum(game.rewards))
-    train_score_current(tf.reduce_sum(game.rewards))
-    replay_buffer.save_game(game)
+    # game = play_game(config, network)
+    # train_score_mean(tf.reduce_sum(game.rewards))
+    # train_score_current(tf.reduce_sum(game.rewards))
+    # replay_buffer.save_game(game)
 
 
 # Each game is produced by starting at the initial board position, then
 # repeatedly executing a Monte Carlo Tree Search to generate moves until the end
 # of the game is reached.
-def play_game(config: MuZeroConfig, network: Network) -> Game:
+def play_game(config: MuZeroConfig) -> Game:
     game = Game(config.discount)
+    network = Network(config)
+    load_checkpoints(network)
 
     while not game.terminal() and len(game.history) < config.max_moves:
         min_max_stats = MinMaxStats(config.known_bounds)
@@ -103,7 +111,6 @@ def play_game(config: MuZeroConfig, network: Network) -> Game:
 def train_network(config: MuZeroConfig,
                   storage: SharedStorage,
                   replay_buffer: ReplayBuffer):
-
     network = Network(config)
 
     lr_schedule = ExponentialDecay(
@@ -118,10 +125,11 @@ def train_network(config: MuZeroConfig,
     # optimizer = SGD(learning_rate=0.001, momentum=0.9)
     # optimizer = Adam(learning_rate=0.001)
 
-    for i in trange(config.training_steps, desc=f"Training - Score Mean: {float(train_score_mean.result()):.2f}"):
-
-        for i in trange(config.num_actors, desc='Running Games', leave=False):
-            run_selfplay(config, storage, replay_buffer)
+    t = trange(config.training_steps, desc='Training', leave=True)
+    for i in t:
+        desc = f"Training - Games: {len(replay_buffer.buffer):05d} - Score Mean: {float(train_score_mean.result()):.2f}"
+        t.set_description(desc)
+        t.refresh()
 
         if i % config.checkpoint_interval == 0:
             storage.save_network(i, network)
@@ -133,6 +141,9 @@ def train_network(config: MuZeroConfig,
         write_summary_score(i)
 
     storage.save_network(config.training_steps, network)
+
+
+
 
 
 def scale_gradient(tensor, scale):
@@ -220,6 +231,12 @@ def launch_job(f, *args):
 def muzero(config: MuZeroConfig):
     storage = SharedStorage(config)
     replay_buffer = ReplayBuffer(config)
+
+    thread_games = Thread(target=run_selfplay, args=(config, replay_buffer))
+    thread_games.start()
+
+    while len(replay_buffer.buffer) < 1:
+        pass
 
     train_network(config, storage, replay_buffer)
     export_models(storage.latest_network())

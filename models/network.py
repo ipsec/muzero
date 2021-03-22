@@ -16,6 +16,10 @@ def scale(t: tf.Tensor):
     return (t - tf.reduce_min(t)) / (tf.reduce_max(t) - tf.reduce_min(t))
 
 
+def build_policy_logits(policy_logits):
+    return {Action(i): logit for i, logit in enumerate(policy_logits[0])}
+
+
 class Dynamics(Model, ABC):
     def __init__(self, hidden_state_size: int, enc_space_size: int):
         """
@@ -125,7 +129,6 @@ class Network(object):
     def initial_inference(self, observation) -> NetworkOutput:
         # representation + prediction function
         with tf.device('/device:GPU:0'):
-
             # representation
             observation = self.prepare_observation(observation)
 
@@ -140,7 +143,7 @@ class Network(object):
             return NetworkOutput(
                 value=float(v.numpy()),
                 reward=0.0,
-                policy_logits=NetworkOutput.build_policy_logits(policy_logits=p),
+                policy_logits=build_policy_logits(policy_logits=p),
                 hidden_state=s_0,
             )
 
@@ -153,7 +156,6 @@ class Network(object):
     def recurrent_inference(self, hidden_state, action: Action) -> NetworkOutput:
         # dynamics + prediction function
         with tf.device('/device:GPU:0'):
-
             # dynamics (encoded_state)
             encoded_state = self.encode_state(hidden_state, action.index, self.config.action_space_size)
 
@@ -169,7 +171,7 @@ class Network(object):
             return NetworkOutput(
                 value=float(v.numpy()),
                 reward=float(r_k.numpy()),
-                policy_logits=NetworkOutput.build_policy_logits(policy_logits=p),
+                policy_logits=build_policy_logits(policy_logits=p),
                 hidden_state=s_k
             )
 
