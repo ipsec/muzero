@@ -110,13 +110,12 @@ def scale_gradient(tensor, scale):
     return tensor * scale + tf.stop_gradient(tensor) * (1 - scale)
 
 
-@tf.function
 def scalar_loss(prediction, target):
     target = tf.experimental.numpy.atleast_2d(target)
     prediction = tf.experimental.numpy.atleast_2d(prediction)
 
-    target = tf_scalar_to_support(target, 300)
-    prediction = tf_scalar_to_support(prediction, 300)
+    target = tf_scalar_to_support(target, 20)
+    prediction = tf_scalar_to_support(prediction, 20)
 
     res = tf.cast(tf.reduce_sum(-target * tf.nn.log_softmax(prediction)), dtype=tf.float32)
     return res

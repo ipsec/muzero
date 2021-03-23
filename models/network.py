@@ -12,7 +12,6 @@ from models import NetworkOutput
 from utils import tf_support_to_scalar
 
 
-@tf.function
 def scale(t: tf.Tensor):
     return (t - tf.reduce_min(t)) / (tf.reduce_max(t) - tf.reduce_min(t))
 
@@ -28,7 +27,7 @@ class Dynamics(Model, ABC):
         :param enc_space_size: size of hidden state
         """
         super(Dynamics, self).__init__()
-        neurons = 64
+        neurons = 20
         reward_initializer = Zeros()
         self.s_inputs = Dense(enc_space_size, input_shape=(enc_space_size,), name="g_s_input")
         self.s_hidden = Dense(neurons, name="g_s_hidden")
@@ -36,16 +35,15 @@ class Dynamics(Model, ABC):
 
         self.r_inputs = Dense(enc_space_size,
                               input_shape=(enc_space_size,),
-                              kernel_initializer=reward_initializer,
+                              # kernel_initializer=reward_initializer,
                               name="g_r_input")
         self.r_hidden = Dense(neurons,
-                              kernel_initializer=reward_initializer,
+                              # kernel_initializer=reward_initializer,
                               name="g_r_hidden")
-        self.r_k = Dense(601,
-                         kernel_initializer=reward_initializer,
+        self.r_k = Dense(41,
+                         # kernel_initializer=reward_initializer,
                          name="g_r_k")
 
-    @tf.function
     def call(self, encoded_space, **kwargs):
         """
         :param **kwargs:
@@ -70,32 +68,31 @@ class Prediction(Model, ABC):
         :param action_state_size: size of action state
         """
         super(Prediction, self).__init__()
-        neurons = 64
+        neurons = 20
         policy_initializer = RandomUniform(minval=0., maxval=1.)
         value_initializer = Zeros()
         self.p_inputs = Dense(hidden_state_size,
                               input_shape=(hidden_state_size,),
-                              kernel_initializer=policy_initializer,
+                              # kernel_initializer=policy_initializer,
                               name="f_p_inputs")
         self.p_hidden = Dense(neurons,
-                              kernel_initializer=policy_initializer,
+                              # kernel_initializer=policy_initializer,
                               name="f_p_hidden")
         self.policy = Dense(action_state_size,
-                            kernel_initializer=policy_initializer,
+                            # kernel_initializer=policy_initializer,
                             name="f_policy")
 
         self.v_inputs = Dense(hidden_state_size,
                               input_shape=(hidden_state_size,),
-                              kernel_initializer=value_initializer,
+                              # kernel_initializer=value_initializer,
                               name="f_v_inputs")
         self.v_hidden = Dense(neurons,
-                              kernel_initializer=value_initializer,
+                              # kernel_initializer=value_initializer,
                               name="f_v_hidden")
-        self.value = Dense(601,
-                           kernel_initializer=value_initializer,
+        self.value = Dense(41,
+                           # kernel_initializer=value_initializer,
                            name="f_value")
 
-    @tf.function
     def call(self, hidden_state, **kwargs):
         """
         :param hidden_state
@@ -119,12 +116,11 @@ class Representation(Model, ABC):
         :param obs_space_size
         """
         super(Representation, self).__init__()
-        neurons = 64
+        neurons = 20
         self.inputs = Dense(obs_space_size, input_shape=(obs_space_size,), name="h_inputs")
         self.hidden = Dense(neurons, name="h_hidden1")
         self.s0 = Dense(obs_space_size, name="h_s0")
 
-    @tf.function
     def call(self, observation, **kwargs):
         """
         :param observation
@@ -144,7 +140,6 @@ class Network(object):
         self.h_representation = Representation(config.state_space_size)
         self._training_steps = 0
 
-    @tf.function
     def prepare_observation(self, observation: tf.Tensor) -> tf.Tensor:
         observation = tf.expand_dims(observation, 0)
         observation = scale(observation)
@@ -162,7 +157,7 @@ class Network(object):
         # prediction
         p, v = self.f_prediction(s_0)
 
-        v = tf_support_to_scalar(v, 300)
+        v = tf_support_to_scalar(v, 20)
 
         return NetworkOutput(
             value=float(v.numpy()),
@@ -171,7 +166,6 @@ class Network(object):
             hidden_state=s_0,
         )
 
-    @tf.function
     def encode_state(self, hidden_state: tf.Tensor, action: int, action_space_size: int) -> tf.Tensor:
         one_hot = tf.expand_dims(tf.one_hot(action, action_space_size), 0)
         encoded_state = tf.concat([hidden_state, one_hot], axis=1)
@@ -185,11 +179,11 @@ class Network(object):
         s_k, r_k = self.g_dynamics(encoded_state)
         s_k = scale(s_k)
 
-        r_k = tf_support_to_scalar(r_k, 300)
+        r_k = tf_support_to_scalar(r_k, 20)
 
         # prediction
         p, v = self.f_prediction(s_k)
-        v = tf_support_to_scalar(v, 300)
+        v = tf_support_to_scalar(v, 20)
 
         return NetworkOutput(
             value=float(v.numpy()),
