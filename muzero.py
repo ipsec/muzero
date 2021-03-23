@@ -9,7 +9,7 @@ from pathlib import Path
 from threading import Thread
 from multiprocessing import Pool, cpu_count
 
-from tensorflow.keras.optimizers import SGD
+from tensorflow.keras.optimizers import Adam
 from tensorflow.python.keras.optimizer_v2.learning_rate_schedule import ExponentialDecay
 
 from config import MuZeroConfig
@@ -85,8 +85,7 @@ def train_network(config: MuZeroConfig,
         decay_steps=config.lr_decay_steps,
         decay_rate=config.lr_decay_rate
     )
-    # optimizer = Adam(learning_rate=lr_schedule)
-    optimizer = SGD(learning_rate=lr_schedule, momentum=0.9)
+    optimizer = Adam(learning_rate=lr_schedule)
 
     t = trange(config.training_steps, desc='Training', leave=True)
     for i in t:
@@ -111,9 +110,10 @@ def scale_gradient(tensor, scale):
     return tensor * scale + tf.stop_gradient(tensor) * (1 - scale)
 
 
+@tf.function
 def scalar_loss(prediction, target):
-    target = np.atleast_2d(target)
-    prediction = np.atleast_2d(prediction)
+    target = tf.experimental.numpy.atleast_2d(target)
+    prediction = tf.experimental.numpy.atleast_2d(prediction)
 
     target = tf_scalar_to_support(target, 300)
     prediction = tf_scalar_to_support(prediction, 300)
@@ -185,7 +185,7 @@ def muzero(config: MuZeroConfig):
     thread_games = Thread(target=run_selfplay, args=(config, replay_buffer))
     thread_games.start()
 
-    while len(replay_buffer.buffer) <= 2000:
+    while len(replay_buffer.buffer) < 1:
         pass
 
     train_network(config, storage, replay_buffer)

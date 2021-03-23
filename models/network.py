@@ -4,6 +4,7 @@ from typing import Callable, List
 import tensorflow as tf
 from tensorflow.keras.layers import Dense
 from tensorflow.keras.models import Model
+from tensorflow.keras.initializers import Zeros, RandomUniform
 
 from config import MuZeroConfig
 from games.game import Action
@@ -28,13 +29,21 @@ class Dynamics(Model, ABC):
         """
         super(Dynamics, self).__init__()
         neurons = 64
+        reward_initializer = Zeros()
         self.s_inputs = Dense(enc_space_size, input_shape=(enc_space_size,), name="g_s_input")
         self.s_hidden = Dense(neurons, name="g_s_hidden")
         self.s_k = Dense(hidden_state_size, name="g_s_k")
 
-        self.r_inputs = Dense(enc_space_size, input_shape=(enc_space_size,), name="g_r_input")
-        self.r_hidden = Dense(neurons, name="g_r_hidden")
-        self.r_k = Dense(601, name="g_r_k")
+        self.r_inputs = Dense(enc_space_size,
+                              input_shape=(enc_space_size,),
+                              kernel_initializer=reward_initializer,
+                              name="g_r_input")
+        self.r_hidden = Dense(neurons,
+                              kernel_initializer=reward_initializer,
+                              name="g_r_hidden")
+        self.r_k = Dense(601,
+                         kernel_initializer=reward_initializer,
+                         name="g_r_k")
 
     @tf.function
     def call(self, encoded_space, **kwargs):
@@ -62,13 +71,29 @@ class Prediction(Model, ABC):
         """
         super(Prediction, self).__init__()
         neurons = 64
-        self.p_inputs = Dense(hidden_state_size, input_shape=(hidden_state_size,), name="f_p_inputs")
-        self.p_hidden = Dense(neurons, name="f_p_hidden")
-        self.policy = Dense(action_state_size, name="f_policy")
+        policy_initializer = RandomUniform(minval=0., maxval=1.)
+        value_initializer = Zeros()
+        self.p_inputs = Dense(hidden_state_size,
+                              input_shape=(hidden_state_size,),
+                              kernel_initializer=policy_initializer,
+                              name="f_p_inputs")
+        self.p_hidden = Dense(neurons,
+                              kernel_initializer=policy_initializer,
+                              name="f_p_hidden")
+        self.policy = Dense(action_state_size,
+                            kernel_initializer=policy_initializer,
+                            name="f_policy")
 
-        self.v_inputs = Dense(hidden_state_size, input_shape=(hidden_state_size,), name="f_v_inputs")
-        self.v_hidden = Dense(neurons, name="f_v_hidden")
-        self.value = Dense(601, name="f_value")
+        self.v_inputs = Dense(hidden_state_size,
+                              input_shape=(hidden_state_size,),
+                              kernel_initializer=value_initializer,
+                              name="f_v_inputs")
+        self.v_hidden = Dense(neurons,
+                              kernel_initializer=value_initializer,
+                              name="f_v_hidden")
+        self.value = Dense(601,
+                           kernel_initializer=value_initializer,
+                           name="f_value")
 
     @tf.function
     def call(self, hidden_state, **kwargs):
@@ -128,24 +153,23 @@ class Network(object):
 
     def initial_inference(self, observation) -> NetworkOutput:
         # representation + prediction function
-        with tf.device('/device:GPU:0'):
-            # representation
-            observation = self.prepare_observation(observation)
+        # representation
+        observation = self.prepare_observation(observation)
 
-            s_0 = self.h_representation(observation)
-            s_0 = scale(s_0)
+        s_0 = self.h_representation(observation)
+        s_0 = scale(s_0)
 
-            # prediction
-            p, v = self.f_prediction(s_0)
+        # prediction
+        p, v = self.f_prediction(s_0)
 
-            v = tf_support_to_scalar(v, 300)
+        v = tf_support_to_scalar(v, 300)
 
-            return NetworkOutput(
-                value=float(v.numpy()),
-                reward=0.0,
-                policy_logits=build_policy_logits(policy_logits=p),
-                hidden_state=s_0,
-            )
+        return NetworkOutput(
+            value=float(v.numpy()),
+            reward=0.0,
+            policy_logits=build_policy_logits(policy_logits=p),
+            hidden_state=s_0,
+        )
 
     @tf.function
     def encode_state(self, hidden_state: tf.Tensor, action: int, action_space_size: int) -> tf.Tensor:
@@ -155,25 +179,24 @@ class Network(object):
 
     def recurrent_inference(self, hidden_state, action: Action) -> NetworkOutput:
         # dynamics + prediction function
-        with tf.device('/device:GPU:0'):
-            # dynamics (encoded_state)
-            encoded_state = self.encode_state(hidden_state, action.index, self.config.action_space_size)
+        # dynamics (encoded_state)
+        encoded_state = self.encode_state(hidden_state, action.index, self.config.action_space_size)
 
-            s_k, r_k = self.g_dynamics(encoded_state)
-            s_k = scale(s_k)
+        s_k, r_k = self.g_dynamics(encoded_state)
+        s_k = scale(s_k)
 
-            r_k = tf_support_to_scalar(r_k, 300)
+        r_k = tf_support_to_scalar(r_k, 300)
 
-            # prediction
-            p, v = self.f_prediction(s_k)
-            v = tf_support_to_scalar(v, 300)
+        # prediction
+        p, v = self.f_prediction(s_k)
+        v = tf_support_to_scalar(v, 300)
 
-            return NetworkOutput(
-                value=float(v.numpy()),
-                reward=float(r_k.numpy()),
-                policy_logits=build_policy_logits(policy_logits=p),
-                hidden_state=s_k
-            )
+        return NetworkOutput(
+            value=float(v.numpy()),
+            reward=float(r_k.numpy()),
+            policy_logits=build_policy_logits(policy_logits=p),
+            hidden_state=s_k
+        )
 
     def get_weights(self) -> List:
         networks = [self.g_dynamics, self.f_prediction, self.h_representation]

@@ -22,6 +22,7 @@ class MuZeroConfig(object):
                  lr_decay_steps: float,
                  lr_decay_rate: float,
                  training_steps: int = 5000,
+                 checkpoint_interval: int = 10,
                  known_bounds: Optional[KnownBounds] = None):
         # Environment
         self.env = env
@@ -57,6 +58,7 @@ class MuZeroConfig(object):
         self.batch_size = batch_size
         self.num_unroll_steps = 5
         self.td_steps = td_steps
+        self.checkpoint_interval = checkpoint_interval
 
         self.weight_decay = 1e-4
         self.momentum = 0.9
