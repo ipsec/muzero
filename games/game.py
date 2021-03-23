@@ -1,3 +1,4 @@
+from random import choice, randrange
 from typing import List
 
 import gym
@@ -175,10 +176,10 @@ class ReplayBuffer(object):
                 for (g, i) in game_pos]
 
     def sample_game(self) -> Game:
-        return np.random.choice(self.buffer)
+        return choice(self.buffer)
 
     def sample_position(self, game) -> int:
-        return np.random.choice(len(game.history))
+        return randrange(0, len(game.history))
 
 
 def make_atari_config(env: Env) -> MuZeroConfig:
@@ -191,7 +192,7 @@ def make_atari_config(env: Env) -> MuZeroConfig:
         discount=0.997,
         dirichlet_alpha=0.25,
         num_simulations=50,  # Number of future moves self-simulated
-        batch_size=32,
+        batch_size=128,
         td_steps=10,  # Number of steps in the future to take into account for calculating the target value
         num_actors=10,
         training_steps=1000000,
