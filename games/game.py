@@ -1,4 +1,4 @@
-from random import choice, randrange
+from collections import deque
 from typing import List
 
 import gym
@@ -57,6 +57,7 @@ class ActionHistory(object):
 class Environment(object):
     """The environment MuZero is interacting with."""
     def __init__(self):
+        # self.env = gym.make('LunarLander-v2')
         self.env = gym.make('CartPole-v1')
         self.action_space_size = self.env.action_space.n
 
@@ -75,7 +76,6 @@ class Game(object):
     """A single episode of interaction with the environment."""
 
     def __init__(self, discount: float):
-        # self.env = gym.make('LunarLander-v2')
         self.env = Environment()
         self.states = [self.env.reset()]
         self.history = []
@@ -157,15 +157,10 @@ class ReplayBuffer(object):
     def __init__(self, config: MuZeroConfig):
         self.window_size = config.window_size
         self.batch_size = config.batch_size
-        self.buffer = []
-        self.scores = []
-
-    def score_mean(self):
-        return np.mean(self.scores)
+        self.buffer = deque(maxlen=self.window_size)
+        self.rand_generator = np.random.Generator(np.random.PCG64())
 
     def save_game(self, game):
-        if len(self.buffer) > self.window_size:
-            self.buffer.pop(0)
         self.buffer.append(game)
 
     def sample_batch(self, num_unroll_steps: int, td_steps: int):
@@ -176,10 +171,10 @@ class ReplayBuffer(object):
                 for (g, i) in game_pos]
 
     def sample_game(self) -> Game:
-        return choice(self.buffer)
+        return self.rand_generator.choice(self.buffer, replace=False)
 
     def sample_position(self, game) -> int:
-        return randrange(0, len(game.history))
+        return self.rand_generator.choice(len(game.history), replace=False)
 
 
 def make_atari_config(env: Env) -> MuZeroConfig:
