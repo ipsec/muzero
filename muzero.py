@@ -192,6 +192,7 @@ def muzero(config: MuZeroConfig):
 
 
 if __name__ == "__main__":
+    np.random.seed(12345)
     train_loss = tf.keras.metrics.Mean('train_loss', dtype=tf.float32)
     train_score_mean = tf.keras.metrics.Mean('train_score_mean', dtype=tf.float32)
     train_score_current = tf.keras.metrics.Mean('train_score_current', dtype=tf.float32)
