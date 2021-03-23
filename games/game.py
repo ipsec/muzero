@@ -1,4 +1,3 @@
-import random
 from typing import List
 
 import gym
@@ -133,7 +132,7 @@ class Game(object):
             for i, reward in enumerate(self.rewards[current_index:bootstrap_index]):
                 value += reward * self.discount ** i  # pytype: disable=unsupported-operands
 
-            if current_index > 0 and current_index <= len(self.rewards):
+            if 0 < current_index <= len(self.rewards):
                 last_reward = self.rewards[current_index - 1]
             else:
                 last_reward = None
@@ -158,8 +157,6 @@ class ReplayBuffer(object):
         self.window_size = config.window_size
         self.batch_size = config.batch_size
         self.buffer = []
-        self.counter = 0
-        self.loss_counter = 0
         self.scores = []
 
     def score_mean(self):
@@ -168,10 +165,6 @@ class ReplayBuffer(object):
     def save_game(self, game):
         if len(self.buffer) > self.window_size:
             self.buffer.pop(0)
-
-        self.counter += 1
-        score = np.sum(game.rewards)
-        self.scores.append(score)
         self.buffer.append(game)
 
     def sample_batch(self, num_unroll_steps: int, td_steps: int):
@@ -182,14 +175,10 @@ class ReplayBuffer(object):
                 for (g, i) in game_pos]
 
     def sample_game(self) -> Game:
-        # Sample game from buffer either uniformly or according to some priority.
-        return random.choice(self.buffer)
-        # return np.random.choice(self.buffer)
+        return np.random.choice(self.buffer)
 
     def sample_position(self, game) -> int:
-        # Sample position from game either uniformly or according to some priority.
-        return random.randrange(len(game.history))
-        # return np.random.choice(len(game.history))
+        return np.random.choice(len(game.history))
 
 
 def make_atari_config(env: Env) -> MuZeroConfig:
@@ -201,12 +190,11 @@ def make_atari_config(env: Env) -> MuZeroConfig:
         max_moves=700,  # Half an hour at action repeat 4.
         discount=0.997,
         dirichlet_alpha=0.25,
-        num_simulations=15,  # Number of future moves self-simulated
-        batch_size=1024,
+        num_simulations=50,  # Number of future moves self-simulated
+        batch_size=32,
         td_steps=10,  # Number of steps in the future to take into account for calculating the target value
-        num_actors=1,
+        num_actors=10,
         training_steps=1000000,
         lr_init=0.001,
         lr_decay_steps=1000,
         lr_decay_rate=0.1)
-    # visit_softmax_temperature_fn=visit_softmax_temperature)

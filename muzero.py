@@ -1,24 +1,16 @@
-# Lint as: python3
-"""Pseudocode description of the MuZero algorithm."""
-# pylint: disable=unused-argument
-# pylint: disable=missing-docstring
-# pylint: disable=g-explicit-length-test
-import logging
-from multiprocessing import Pool, cpu_count
-from pathlib import Path
-from threading import Thread
+# -*- coding: utf-8 -*-
 
 import gym
 import numpy as np
 import tensorflow as tf
-from tensorflow.keras.optimizers import Adam
-# MuZero training is split into two independent parts: Network training and
-# self-play data generation.
-# These two parts only communicate by transferring the latest network checkpoint
-# from the training to the self-play, and the finished games from the self-play
-# to the training.
-from tensorflow.python.keras.optimizer_v2.learning_rate_schedule import ExponentialDecay
+
 from tqdm import trange
+from pathlib import Path
+from threading import Thread
+from multiprocessing import Pool, cpu_count
+
+from tensorflow.keras.optimizers import SGD
+from tensorflow.python.keras.optimizer_v2.learning_rate_schedule import ExponentialDecay
 
 from config import MuZeroConfig
 from games.game import ReplayBuffer, Game, make_atari_config
@@ -27,24 +19,6 @@ from models.network import Network
 from storage import SharedStorage
 from utils import MinMaxStats, tf_scalar_to_support
 from utils.exports import save_checkpoints, export_models, load_checkpoints
-
-FORMAT = '%(asctime)-15s %(clientip)s %(user)-8s %(message)s'
-
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)-15s %(threadName)s %(message)s')
-train_loss = tf.keras.metrics.Mean('train_loss', dtype=tf.float32)
-train_score_mean = tf.keras.metrics.Mean('train_score_mean', dtype=tf.float32)
-train_score_current = tf.keras.metrics.Mean('train_score_current', dtype=tf.float32)
-
-##################################
-####### Part 1: Self-Play ########
-
-# Each self-play job is independent of all others; it takes the latest network
-# snapshot, produces a game and makes it available to the training job by
-# writing it to a shared replay buffer.
-
-data_path = Path("./data/muzero")
-data_path.mkdir(parents=True, exist_ok=True)
-summary_writer = tf.summary.create_file_writer(str(data_path) + "/summary/")
 
 
 def write_summary_score(step):
@@ -56,9 +30,9 @@ def write_summary_score(step):
 
 
 def run_selfplay(config: MuZeroConfig, replay_buffer: ReplayBuffer):
-    with Pool(2) as pool:
+    with Pool(int(np.ceil(cpu_count() / 2))) as pool:
         while True:
-            results = [pool.apply_async(func=play_game, args=(config, )) for i in range(config.num_actors)]
+            results = [pool.apply_async(func=play_game, args=(config,)) for _ in range(config.num_actors)]
             for p in results:
                 game = p.get()
                 replay_buffer.save_game(game)
@@ -94,18 +68,11 @@ def play_game(config: MuZeroConfig) -> Game:
         # We then run a Monte Carlo Tree Search using only action sequences and the
         # model learned by the network.
         run_mcts(config, root, game.action_history(), network, min_max_stats)
-        action = select_action(config, len(game.history), root, network)
+        action = select_action(root, network)
         game.apply(action)
         game.store_search_statistics(root)
 
     return game
-
-
-######### End Self-Play ##########
-##################################
-
-##################################
-####### Part 2: Training #########
 
 
 def train_network(config: MuZeroConfig,
@@ -118,12 +85,8 @@ def train_network(config: MuZeroConfig,
         decay_steps=config.lr_decay_steps,
         decay_rate=config.lr_decay_rate
     )
-    optimizer = Adam(learning_rate=lr_schedule)
-    # optimizer = Adam(learning_rate=config.lr_init)
-    # optimizer = SGD(learning_rate=config.lr_init, momentum=config.momentum)
-    # optimizer = SGD(learning_rate=lr_schedule, momentum=0.9)
-    # optimizer = SGD(learning_rate=0.001, momentum=0.9)
-    # optimizer = Adam(learning_rate=0.001)
+    # optimizer = Adam(learning_rate=lr_schedule)
+    optimizer = SGD(learning_rate=lr_schedule, momentum=0.9)
 
     t = trange(config.training_steps, desc='Training', leave=True)
     for i in t:
@@ -141,9 +104,6 @@ def train_network(config: MuZeroConfig,
         write_summary_score(i)
 
     storage.save_network(config.training_steps, network)
-
-
-
 
 
 def scale_gradient(tensor, scale):
@@ -185,14 +145,14 @@ def compute_loss(network: Network, batch, weight_decay: float):
             if not target_policy:  # How to treat absorbing states? Just pass?
                 continue
 
-            l = tf.nn.softmax_cross_entropy_with_logits(
+            local_loss = tf.nn.softmax_cross_entropy_with_logits(
                 logits=tf.stack(list(network_output.policy_logits.values())), labels=target_policy)
 
-            l += scalar_loss(network_output.value, target_value)
+            local_loss += scalar_loss(network_output.value, target_value)
             if k > 0:
-                l += scalar_loss(network_output.reward, target_reward)
+                local_loss += scalar_loss(network_output.reward, target_reward)
 
-            loss += scale_gradient(l, gradient_scale)
+            loss += scale_gradient(local_loss, gradient_scale)
     loss /= len(batch)
 
     for weights in network.get_weights():
@@ -218,16 +178,6 @@ def update_weights(optimizer: tf.optimizers.Optimizer, network: Network, batch, 
     return loss
 
 
-######### End Training ###########
-##################################
-
-################################################################################
-############################# End of pseudocode ################################
-################################################################################
-def launch_job(f, *args):
-    f(*args)
-
-
 def muzero(config: MuZeroConfig):
     storage = SharedStorage(config)
     replay_buffer = ReplayBuffer(config)
@@ -243,6 +193,13 @@ def muzero(config: MuZeroConfig):
 
 
 if __name__ == "__main__":
+    train_loss = tf.keras.metrics.Mean('train_loss', dtype=tf.float32)
+    train_score_mean = tf.keras.metrics.Mean('train_score_mean', dtype=tf.float32)
+    train_score_current = tf.keras.metrics.Mean('train_score_current', dtype=tf.float32)
+
+    data_path = Path("./data/muzero")
+    data_path.mkdir(parents=True, exist_ok=True)
+    summary_writer = tf.summary.create_file_writer(str(data_path) + "/summary/")
+
     env = gym.make('CartPole-v1')
-    config = make_atari_config(env)
-    muzero(config)
+    muzero(make_atari_config(env))
