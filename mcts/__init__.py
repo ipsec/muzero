@@ -73,11 +73,7 @@ def ucb_score(config: MuZeroConfig, parent: Node, child: Node,
     pb_c *= math.sqrt(parent.visit_count) / (child.visit_count + 1)
 
     prior_score = pb_c * child.prior
-    if child.visit_count > 0:
-        value_score = min_max_stats.normalize(child.reward +
-                                              config.discount * child.value())
-    else:
-        value_score = 0
+    value_score = min_max_stats.normalize(child.value())
     return prior_score + value_score
 
 

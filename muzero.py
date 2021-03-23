@@ -185,7 +185,7 @@ def muzero(config: MuZeroConfig):
     thread_games = Thread(target=run_selfplay, args=(config, replay_buffer))
     thread_games.start()
 
-    while len(replay_buffer.buffer) < 1:
+    while len(replay_buffer.buffer) <= 2000:
         pass
 
     train_network(config, storage, replay_buffer)

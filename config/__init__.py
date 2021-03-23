@@ -52,7 +52,7 @@ class MuZeroConfig(object):
         # Training
         self.training_steps = training_steps
         self.epochs = 5000
-        self.checkpoint_interval = 1000
+        self.checkpoint_interval = 100
         self.window_size = 125000
         self.batch_size = batch_size
         self.num_unroll_steps = 5
