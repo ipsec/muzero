@@ -9,8 +9,6 @@ MAXIMUM_FLOAT_VALUE = float('inf')
 
 KnownBounds = collections.namedtuple('KnownBounds', ['min', 'max'])
 
-# KnownBounds = collections.namedtuple('KnownBounds', ['min', 'max'])
-
 
 class MinMaxStats(object):
     """A class that holds the min-max values of the tree."""
@@ -50,14 +48,17 @@ class Node(object):
         return self.value_sum / self.visit_count
 
 
+@tf.function
 def scalar_transform(x: float, eps: float = 0.001) -> tf.Tensor:
     return tf.math.sign(x) * (tf.math.sqrt(tf.math.abs(x) + 1) - 1) + eps * x
 
 
+@tf.function
 def inverse_scalar_transform(x: float, eps: float = 0.001) -> tf.Tensor:
     return tf.math.sign(x) * (((tf.math.sqrt(1. + 4. * eps * (tf.math.abs(x) + 1 + eps)) - 1) / (2 * eps)) ** 2 - 1)
 
 
+@tf.function
 def tf_scalar_to_support(x: tf.Tensor,
                          support_size: int,
                          reward_transformer: typing.Callable = scalar_transform, **kwargs) -> tf.Tensor:
@@ -77,16 +78,10 @@ def tf_scalar_to_support(x: tf.Tensor,
     indexes = tf.squeeze(tf.stack([idx_0, idx_1]))
 
     updates = tf.squeeze(tf.concat([1 - prob, prob], axis=0))
-    res = None
-    try:
-        res = tf.scatter_nd(indexes, updates, (1, 2 * support_size + 1))
-    except Exception as e:
-        print(e)
-        pass
-
-    return res
+    return tf.scatter_nd(indexes, updates, (1, 2 * support_size + 1))
 
 
+@tf.function
 def tf_support_to_scalar(x: tf.Tensor, support_size: int,
                          inv_reward_transformer: typing.Callable = inverse_scalar_transform,
                          **kwargs) -> tf.Tensor:
@@ -96,6 +91,4 @@ def tf_support_to_scalar(x: tf.Tensor, support_size: int,
     bins = tf.range(-support_size, support_size + 1, dtype=tf.float32)
     value = tf.tensordot(tf.squeeze(x), tf.squeeze(bins), 1)
 
-    value = inv_reward_transformer(value, **kwargs)
-
-    return value
+    return inv_reward_transformer(value, **kwargs)

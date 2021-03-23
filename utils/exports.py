@@ -19,7 +19,6 @@ def load_checkpoints(network: Network):
             path = Path(f'./checkpoints/muzero/{model.__class__.__name__}/checkpoint')
             if Path.exists(path):
                 model.load_weights(path)
-                print(f"Load weights with success.")
     except Exception as e:
         print(f"Unable to load networks. {e}")
 

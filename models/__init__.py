@@ -1,16 +1,10 @@
-from dataclasses import dataclass
-from typing import Dict, List
+from typing import Dict, List, NamedTuple
 
 from games.game import Action
 
 
-@dataclass
-class NetworkOutput:
-    policy_logits: Dict[Action, float]
-    hidden_state: List[float]
+class NetworkOutput(NamedTuple):
     value: float
     reward: float
-
-    @staticmethod
-    def build_policy_logits(policy_logits):
-        return {Action(i): logit for i, logit in enumerate(policy_logits[0])}
+    policy_logits: Dict[Action, float]
+    hidden_state: List[float]

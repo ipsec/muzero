@@ -1,4 +1,3 @@
-import random
 from typing import List
 
 import gym
@@ -6,7 +5,6 @@ import numpy as np
 from gym import Env
 
 from config import MuZeroConfig
-from summary import write_summary_score
 from utils import Node
 
 
@@ -57,25 +55,35 @@ class ActionHistory(object):
 
 class Environment(object):
     """The environment MuZero is interacting with."""
+    def __init__(self):
+        self.env = gym.make('CartPole-v1')
+        self.action_space_size = self.env.action_space.n
+
+    def reset(self):
+        return self.env.reset()
 
     def step(self, action):
-        pass
+        observation, reward, done, info = self.env.step(action)
+        return observation, reward, done, info
+
+    def close(self):
+        self.env.close()
 
 
 class Game(object):
     """A single episode of interaction with the environment."""
 
-    def __init__(self, action_space_size: int, discount: float):
+    def __init__(self, discount: float):
         # self.env = gym.make('LunarLander-v2')
-        self.env = gym.make('CartPole-v1')
+        self.env = Environment()
         self.states = [self.env.reset()]
         self.history = []
         self.rewards = []
         self.child_visits = []
         self.root_values = []
-        self.action_space_size = self.env.action_space.n
+        self.action_space_size = self.env.action_space_size
         self.discount = discount
-        self.actions = list(map(lambda i: Action(i), range(self.env.action_space.n)))
+        self.actions = list(map(lambda i: Action(i), range(self.action_space_size)))
         self.done = False
 
     def terminal(self) -> bool:
@@ -124,7 +132,7 @@ class Game(object):
             for i, reward in enumerate(self.rewards[current_index:bootstrap_index]):
                 value += reward * self.discount ** i  # pytype: disable=unsupported-operands
 
-            if current_index > 0 and current_index <= len(self.rewards):
+            if 0 < current_index <= len(self.rewards):
                 last_reward = self.rewards[current_index - 1]
             else:
                 last_reward = None
@@ -149,8 +157,6 @@ class ReplayBuffer(object):
         self.window_size = config.window_size
         self.batch_size = config.batch_size
         self.buffer = []
-        self.counter = 0
-        self.loss_counter = 0
         self.scores = []
 
     def score_mean(self):
@@ -159,11 +165,6 @@ class ReplayBuffer(object):
     def save_game(self, game):
         if len(self.buffer) > self.window_size:
             self.buffer.pop(0)
-
-        self.counter += 1
-        score = np.sum(game.rewards)
-        self.scores.append(score)
-        write_summary_score(score, self.counter)
         self.buffer.append(game)
 
     def sample_batch(self, num_unroll_steps: int, td_steps: int):
@@ -174,13 +175,9 @@ class ReplayBuffer(object):
                 for (g, i) in game_pos]
 
     def sample_game(self) -> Game:
-        # Sample game from buffer either uniformly or according to some priority.
-        # return random.choice(self.buffer)
         return np.random.choice(self.buffer)
 
     def sample_position(self, game) -> int:
-        # Sample position from game either uniformly or according to some priority.
-        # return random.randrange(len(game.history))
         return np.random.choice(len(game.history))
 
 
@@ -194,11 +191,10 @@ def make_atari_config(env: Env) -> MuZeroConfig:
         discount=0.997,
         dirichlet_alpha=0.25,
         num_simulations=50,  # Number of future moves self-simulated
-        batch_size=128,
+        batch_size=32,
         td_steps=10,  # Number of steps in the future to take into account for calculating the target value
-        num_actors=1,
+        num_actors=10,
         training_steps=1000000,
         lr_init=0.001,
-        lr_decay_steps=100,
+        lr_decay_steps=1000,
         lr_decay_rate=0.1)
-    # visit_softmax_temperature_fn=visit_softmax_temperature)
