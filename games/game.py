@@ -195,7 +195,8 @@ def make_atari_config(env: Env) -> MuZeroConfig:
         batch_size=128,
         td_steps=10,  # Number of steps in the future to take into account for calculating the target value
         num_actors=10,
-        training_steps=1000000,
-        lr_init=0.001,
+        training_steps=10000,
+        checkpoint_interval=10,
+        lr_init=0.02,
         lr_decay_steps=1000,
-        lr_decay_rate=0.1)
+        lr_decay_rate=0.9)
