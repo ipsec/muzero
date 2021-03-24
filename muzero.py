@@ -18,7 +18,7 @@ from mcts import Node, expand_node, backpropagate, add_exploration_noise, run_mc
 from models.network import Network
 from storage import SharedStorage
 from utils import MinMaxStats, tf_scalar_to_support
-from utils.exports import save_checkpoints, export_models, load_checkpoints
+from utils.exports import export_models
 
 
 def write_summary_score(step):
@@ -51,7 +51,7 @@ def run_selfplay(config: MuZeroConfig, replay_buffer: ReplayBuffer):
 def play_game(config: MuZeroConfig) -> Game:
     game = Game(config.discount)
     network = Network(config)
-    load_checkpoints(network)
+    network.restore_checkpoint()
 
     while not game.terminal() and len(game.history) < config.max_moves:
         min_max_stats = MinMaxStats(config.known_bounds)
@@ -104,7 +104,7 @@ def train_network(config: MuZeroConfig,
 
         if i % config.checkpoint_interval == 0:
             storage.save_network(i, network)
-            save_checkpoints(network)
+            network.save_checkpoint()
             replay_buffer.update_main()
 
         batch = replay_buffer.sample_batch(config.num_unroll_steps, config.td_steps)

@@ -48,14 +48,17 @@ class Node(object):
         return self.value_sum / self.visit_count
 
 
+@tf.function
 def scalar_transform(x: float, eps: float = 0.001) -> tf.Tensor:
     return tf.math.sign(x) * (tf.math.sqrt(tf.math.abs(x) + 1) - 1) + eps * x
 
 
+@tf.function
 def inverse_scalar_transform(x: float, eps: float = 0.001) -> tf.Tensor:
     return tf.math.sign(x) * (((tf.math.sqrt(1. + 4. * eps * (tf.math.abs(x) + 1 + eps)) - 1) / (2 * eps)) ** 2 - 1)
 
 
+@tf.function
 def tf_scalar_to_support(x: tf.Tensor,
                          support_size: int,
                          reward_transformer: typing.Callable = scalar_transform, **kwargs) -> tf.Tensor:
@@ -78,6 +81,7 @@ def tf_scalar_to_support(x: tf.Tensor,
     return tf.scatter_nd(indexes, updates, (1, 2 * support_size + 1))
 
 
+@tf.function
 def tf_support_to_scalar(x: tf.Tensor, support_size: int,
                          inv_reward_transformer: typing.Callable = inverse_scalar_transform,
                          **kwargs) -> tf.Tensor:
