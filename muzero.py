@@ -18,7 +18,7 @@ from mcts import Node, expand_node, backpropagate, add_exploration_noise, run_mc
 from models.network import Network
 from storage import SharedStorage
 from utils import MinMaxStats, tf_scalar_to_support
-from utils.exports import save_checkpoints, export_models, load_checkpoints
+from utils.exports import export_models
 
 
 def write_summary_score(step):

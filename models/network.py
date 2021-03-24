@@ -3,10 +3,9 @@ from pathlib import Path
 from typing import Callable, List
 
 import tensorflow as tf
+from tensorflow.keras.initializers import Zeros, RandomUniform
 from tensorflow.keras.layers import Dense
 from tensorflow.keras.models import Model
-from tensorflow.keras.initializers import Zeros, RandomUniform
-from tensorflow.keras.regularizers import l2
 
 from config import MuZeroConfig
 from games.game import Action
@@ -31,33 +30,27 @@ class Dynamics(Model, ABC):
         super(Dynamics, self).__init__()
         neurons = 20
         reward_initializer = Zeros()
-        regularizer = l2(1e-4)
         self.s_inputs = Dense(enc_space_size,
                               input_shape=(enc_space_size,),
-                              kernel_regularizer=regularizer,
                               name="g_s_input")
         self.s_hidden = Dense(neurons,
-                              kernel_regularizer=regularizer,
                               name="g_s_hidden")
         self.s_k = Dense(hidden_state_size,
-                         kernel_regularizer=regularizer,
                          activation=tf.nn.tanh,
                          name="g_s_k")
 
         self.r_inputs = Dense(enc_space_size,
                               input_shape=(enc_space_size,),
                               kernel_initializer=reward_initializer,
-                              kernel_regularizer=regularizer,
                               name="g_r_input")
         self.r_hidden = Dense(neurons,
                               kernel_initializer=reward_initializer,
-                              kernel_regularizer=regularizer,
                               name="g_r_hidden")
         self.r_k = Dense(41,
                          kernel_initializer=reward_initializer,
-                         kernel_regularizer=regularizer,
                          name="g_r_k")
 
+    @tf.function
     def call(self, encoded_space, **kwargs):
         """
         :param **kwargs:
@@ -85,35 +78,29 @@ class Prediction(Model, ABC):
         neurons = 20
         policy_initializer = RandomUniform(minval=0., maxval=1.)
         value_initializer = Zeros()
-        regularizer = l2(1e-4)
         self.p_inputs = Dense(hidden_state_size,
                               input_shape=(hidden_state_size,),
                               kernel_initializer=policy_initializer,
-                              kernel_regularizer=regularizer,
                               name="f_p_inputs")
         self.p_hidden = Dense(neurons,
                               kernel_initializer=policy_initializer,
-                              kernel_regularizer=regularizer,
                               name="f_p_hidden")
         self.policy = Dense(action_state_size,
                             kernel_initializer=policy_initializer,
-                            kernel_regularizer=regularizer,
                             name="f_policy")
 
         self.v_inputs = Dense(hidden_state_size,
                               input_shape=(hidden_state_size,),
                               kernel_initializer=value_initializer,
-                              kernel_regularizer=regularizer,
                               name="f_v_inputs")
         self.v_hidden = Dense(neurons,
                               kernel_initializer=value_initializer,
-                              kernel_regularizer=regularizer,
                               name="f_v_hidden")
         self.value = Dense(41,
                            kernel_initializer=value_initializer,
-                           kernel_regularizer=regularizer,
                            name="f_value")
 
+    @tf.function
     def call(self, hidden_state, **kwargs):
         """
         :param hidden_state
@@ -138,19 +125,16 @@ class Representation(Model, ABC):
         """
         super(Representation, self).__init__()
         neurons = 20
-        regularizer = l2(1e-4)
         self.inputs = Dense(obs_space_size,
                             input_shape=(obs_space_size,),
-                            kernel_regularizer=regularizer,
                             name="h_inputs")
         self.hidden = Dense(neurons,
-                            kernel_regularizer=regularizer,
                             name="h_hidden1")
         self.s0 = Dense(obs_space_size,
-                        kernel_regularizer=regularizer,
                         activation=tf.nn.tanh,
                         name="h_s0")
 
+    @tf.function
     def call(self, observation, **kwargs):
         """
         :param observation
@@ -204,7 +188,7 @@ class Network(object):
 
     def prepare_observation(self, observation: tf.Tensor) -> tf.Tensor:
         observation = tf.expand_dims(observation, 0)
-        observation = scale(observation)
+        # observation = scale(observation)
         observation = tf.cast(observation, dtype=tf.float32)
         return observation
 
@@ -228,6 +212,7 @@ class Network(object):
             hidden_state=s_0,
         )
 
+    @tf.function
     def encode_state(self, hidden_state: tf.Tensor, action: int, action_space_size: int) -> tf.Tensor:
         one_hot = tf.expand_dims(tf.one_hot(action, action_space_size), 0)
         encoded_state = tf.concat([hidden_state, one_hot], axis=1)
