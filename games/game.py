@@ -1,4 +1,5 @@
 from collections import deque
+from random import randrange, choice
 from typing import List
 
 import gym
@@ -158,7 +159,6 @@ class ReplayBuffer(object):
         self.window_size = config.window_size
         self.batch_size = config.batch_size
         self.buffer = deque(maxlen=self.window_size)
-        self.rand_generator = np.random.Generator(np.random.PCG64())
 
     def save_game(self, game):
         self.buffer.append(game)
@@ -171,10 +171,10 @@ class ReplayBuffer(object):
                 for (g, i) in game_pos]
 
     def sample_game(self) -> Game:
-        return self.rand_generator.choice(self.buffer, replace=False)
+        return choice(self.buffer)
 
     def sample_position(self, game) -> int:
-        return self.rand_generator.choice(len(game.history), replace=False)
+        return randrange(len(game.history))
 
 
 def make_atari_config(env: Env) -> MuZeroConfig:

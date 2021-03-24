@@ -117,7 +117,7 @@ def scalar_loss(prediction, target):
     target = tf_scalar_to_support(target, 20)
     prediction = tf_scalar_to_support(prediction, 20)
 
-    res = tf.cast(tf.reduce_sum(-target * tf.nn.log_softmax(prediction)), dtype=tf.float32)
+    res = tf.cast(tf.nn.softmax_cross_entropy_with_logits(logits=prediction, labels=target), dtype=tf.float32)
     return res
 
 
