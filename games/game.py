@@ -159,9 +159,18 @@ class ReplayBuffer(object):
         self.window_size = config.window_size
         self.batch_size = config.batch_size
         self.buffer = deque(maxlen=self.window_size)
+        self.buffer_tmp = deque(maxlen=self.window_size)
+
+    def update_main(self):
+        """
+        Update self.buffer with recent played games
+        :return: None
+        """
+        self.buffer += self.buffer_tmp
+        self.buffer_tmp.clear()
 
     def save_game(self, game):
-        self.buffer.append(game)
+        self.buffer_tmp.append(game)
 
     def sample_batch(self, num_unroll_steps: int, td_steps: int):
         games = [self.sample_game() for _ in range(self.batch_size)]
@@ -171,10 +180,12 @@ class ReplayBuffer(object):
                 for (g, i) in game_pos]
 
     def sample_game(self) -> Game:
-        return choice(self.buffer)
+        return np.random.choice(self.buffer)
+        #return choice(self.buffer)
 
     def sample_position(self, game) -> int:
-        return randrange(len(game.history))
+        return np.random.choice(len(game.history))
+        #return randrange(len(game.history))
 
 
 def make_atari_config(env: Env) -> MuZeroConfig:
@@ -186,7 +197,7 @@ def make_atari_config(env: Env) -> MuZeroConfig:
         max_moves=700,  # Half an hour at action repeat 4.
         discount=0.997,
         dirichlet_alpha=0.25,
-        num_simulations=50,  # Number of future moves self-simulated
+        num_simulations=15,  # Number of future moves self-simulated
         batch_size=128,
         td_steps=10,  # Number of steps in the future to take into account for calculating the target value
         num_actors=10,
