@@ -1,10 +1,12 @@
 from abc import ABC
+from pathlib import Path
 from typing import Callable, List
 
 import tensorflow as tf
 from tensorflow.keras.layers import Dense
 from tensorflow.keras.models import Model
 from tensorflow.keras.initializers import Zeros, RandomUniform
+from tensorflow.keras.regularizers import l2
 
 from config import MuZeroConfig
 from games.game import Action
@@ -29,19 +31,31 @@ class Dynamics(Model, ABC):
         super(Dynamics, self).__init__()
         neurons = 20
         reward_initializer = Zeros()
-        self.s_inputs = Dense(enc_space_size, input_shape=(enc_space_size,), name="g_s_input")
-        self.s_hidden = Dense(neurons, name="g_s_hidden")
-        self.s_k = Dense(hidden_state_size, name="g_s_k")
+        regularizer = l2(1e-4)
+        self.s_inputs = Dense(enc_space_size,
+                              input_shape=(enc_space_size,),
+                              kernel_regularizer=regularizer,
+                              name="g_s_input")
+        self.s_hidden = Dense(neurons,
+                              kernel_regularizer=regularizer,
+                              name="g_s_hidden")
+        self.s_k = Dense(hidden_state_size,
+                         kernel_regularizer=regularizer,
+                         activation=tf.nn.tanh,
+                         name="g_s_k")
 
         self.r_inputs = Dense(enc_space_size,
                               input_shape=(enc_space_size,),
-                              # kernel_initializer=reward_initializer,
+                              kernel_initializer=reward_initializer,
+                              kernel_regularizer=regularizer,
                               name="g_r_input")
         self.r_hidden = Dense(neurons,
-                              # kernel_initializer=reward_initializer,
+                              kernel_initializer=reward_initializer,
+                              kernel_regularizer=regularizer,
                               name="g_r_hidden")
         self.r_k = Dense(41,
-                         # kernel_initializer=reward_initializer,
+                         kernel_initializer=reward_initializer,
+                         kernel_regularizer=regularizer,
                          name="g_r_k")
 
     def call(self, encoded_space, **kwargs):
@@ -71,26 +85,33 @@ class Prediction(Model, ABC):
         neurons = 20
         policy_initializer = RandomUniform(minval=0., maxval=1.)
         value_initializer = Zeros()
+        regularizer = l2(1e-4)
         self.p_inputs = Dense(hidden_state_size,
                               input_shape=(hidden_state_size,),
-                              # kernel_initializer=policy_initializer,
+                              kernel_initializer=policy_initializer,
+                              kernel_regularizer=regularizer,
                               name="f_p_inputs")
         self.p_hidden = Dense(neurons,
-                              # kernel_initializer=policy_initializer,
+                              kernel_initializer=policy_initializer,
+                              kernel_regularizer=regularizer,
                               name="f_p_hidden")
         self.policy = Dense(action_state_size,
-                            # kernel_initializer=policy_initializer,
+                            kernel_initializer=policy_initializer,
+                            kernel_regularizer=regularizer,
                             name="f_policy")
 
         self.v_inputs = Dense(hidden_state_size,
                               input_shape=(hidden_state_size,),
-                              # kernel_initializer=value_initializer,
+                              kernel_initializer=value_initializer,
+                              kernel_regularizer=regularizer,
                               name="f_v_inputs")
         self.v_hidden = Dense(neurons,
-                              # kernel_initializer=value_initializer,
+                              kernel_initializer=value_initializer,
+                              kernel_regularizer=regularizer,
                               name="f_v_hidden")
         self.value = Dense(41,
-                           # kernel_initializer=value_initializer,
+                           kernel_initializer=value_initializer,
+                           kernel_regularizer=regularizer,
                            name="f_value")
 
     def call(self, hidden_state, **kwargs):
@@ -117,9 +138,18 @@ class Representation(Model, ABC):
         """
         super(Representation, self).__init__()
         neurons = 20
-        self.inputs = Dense(obs_space_size, input_shape=(obs_space_size,), name="h_inputs")
-        self.hidden = Dense(neurons, name="h_hidden1")
-        self.s0 = Dense(obs_space_size, name="h_s0")
+        regularizer = l2(1e-4)
+        self.inputs = Dense(obs_space_size,
+                            input_shape=(obs_space_size,),
+                            kernel_regularizer=regularizer,
+                            name="h_inputs")
+        self.hidden = Dense(neurons,
+                            kernel_regularizer=regularizer,
+                            name="h_hidden1")
+        self.s0 = Dense(obs_space_size,
+                        kernel_regularizer=regularizer,
+                        activation=tf.nn.tanh,
+                        name="h_s0")
 
     def call(self, observation, **kwargs):
         """
@@ -140,6 +170,38 @@ class Network(object):
         self.h_representation = Representation(config.state_space_size)
         self._training_steps = 0
 
+        self.g_dynamics_checkpoint = tf.train.Checkpoint(model=self.g_dynamics)
+        self.f_prediction_checkpoint = tf.train.Checkpoint(model=self.f_prediction)
+        self.h_representation_checkpoint = tf.train.Checkpoint(model=self.h_representation)
+
+        self.g_dynamics_checkpoint_path = './checkpoints/muzero/Dynamics'
+        Path.mkdir(Path(self.g_dynamics_checkpoint_path), parents=True, exist_ok=True)
+        self.manager_dynamics = tf.train.CheckpointManager(self.g_dynamics_checkpoint,
+                                                           directory=self.g_dynamics_checkpoint_path,
+                                                           max_to_keep=5)
+
+        self.f_prediction_checkpoint_path = './checkpoints/muzero/Prediction'
+        Path.mkdir(Path(self.f_prediction_checkpoint_path), parents=True, exist_ok=True)
+        self.manager_prediction = tf.train.CheckpointManager(self.f_prediction_checkpoint,
+                                                             directory=self.f_prediction_checkpoint_path,
+                                                             max_to_keep=5)
+
+        self.h_representation_checkpoint_path = './checkpoints/muzero/Representation'
+        Path.mkdir(Path(self.h_representation_checkpoint_path), parents=True, exist_ok=True)
+        self.manager_representation = tf.train.CheckpointManager(self.h_representation_checkpoint,
+                                                                 directory=self.h_representation_checkpoint_path,
+                                                                 max_to_keep=5)
+
+    def save_checkpoint(self):
+        self.manager_dynamics.save()
+        self.manager_prediction.save()
+        self.manager_representation.save()
+
+    def restore_checkpoint(self):
+        self.g_dynamics_checkpoint.restore(self.manager_dynamics.latest_checkpoint)
+        self.f_prediction_checkpoint.restore(self.manager_prediction.latest_checkpoint)
+        self.h_representation_checkpoint.restore(self.manager_representation.latest_checkpoint)
+
     def prepare_observation(self, observation: tf.Tensor) -> tf.Tensor:
         observation = tf.expand_dims(observation, 0)
         observation = scale(observation)
@@ -152,7 +214,7 @@ class Network(object):
         observation = self.prepare_observation(observation)
 
         s_0 = self.h_representation(observation)
-        s_0 = scale(s_0)
+        # s_0 = scale(s_0)
 
         # prediction
         p, v = self.f_prediction(s_0)
@@ -177,7 +239,7 @@ class Network(object):
         encoded_state = self.encode_state(hidden_state, action.index, self.config.action_space_size)
 
         s_k, r_k = self.g_dynamics(encoded_state)
-        s_k = scale(s_k)
+        # s_k = scale(s_k)
 
         r_k = tf_support_to_scalar(r_k, 20)
 
