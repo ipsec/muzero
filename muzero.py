@@ -89,13 +89,23 @@ def train_network(config: MuZeroConfig,
 
     t = trange(config.training_steps, desc='Training', leave=True)
     for i in t:
-        desc = f"Training - Games: {len(replay_buffer.buffer):05d} - Score Mean: {float(train_score_mean.result()):.2f}"
+
+        desc = f"Games (training/played): " \
+               f"{len(replay_buffer.buffer_tmp)}/{len(replay_buffer.buffer_tmp)} - " \
+               f"Score Mean: {float(train_score_mean.result()):.2f}"
+
+        if i > 0:
+            desc = f"Games (training/played): " \
+                   f"{len(replay_buffer.buffer)}/{len(replay_buffer.buffer_tmp)} - " \
+                   f"Score Mean: {float(train_score_mean.result()):.2f}"
+
         t.set_description(desc)
         t.refresh()
 
         if i % config.checkpoint_interval == 0:
             storage.save_network(i, network)
             save_checkpoints(network)
+            replay_buffer.update_main()
 
         batch = replay_buffer.sample_batch(config.num_unroll_steps, config.td_steps)
         loss = update_weights(optimizer, network, batch, config.weight_decay)
@@ -184,7 +194,7 @@ def muzero(config: MuZeroConfig):
     thread_games = Thread(target=run_selfplay, args=(config, replay_buffer))
     thread_games.start()
 
-    while len(replay_buffer.buffer) < 1:
+    while len(replay_buffer.buffer_tmp) < 1:
         pass
 
     train_network(config, storage, replay_buffer)
