@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import pickle
 
 import gym
 import numpy as np
@@ -17,7 +18,7 @@ from games.game import ReplayBuffer, Game, make_atari_config
 from mcts import Node, expand_node, backpropagate, add_exploration_noise, run_mcts, select_action
 from models.network import Network
 from storage import SharedStorage
-from utils import MinMaxStats, tf_scalar_to_support
+from utils import MinMaxStats, tf_scalar_to_support_batch
 from utils.exports import export_models
 
 
@@ -121,11 +122,16 @@ def scale_gradient(tensor, scale):
 
 
 def scalar_loss(prediction, target):
-    target = tf.experimental.numpy.atleast_2d(target)
-    prediction = tf.experimental.numpy.atleast_2d(prediction)
 
-    target = tf_scalar_to_support(target, 20)
-    prediction = tf_scalar_to_support(prediction, 20)
+    # Some target or prediction with None value, removing it
+    target = [v for v in target if v is not None]
+    prediction = [v for v in prediction if v is not None]
+
+    target = tf.experimental.numpy.atleast_2d(target[:len(prediction)])
+    prediction = tf.experimental.numpy.atleast_2d(prediction[:len(target)])
+
+    target = tf_scalar_to_support_batch(target, 20)
+    prediction = tf_scalar_to_support_batch(prediction, 20)
 
     res = tf.cast(tf.nn.softmax_cross_entropy_with_logits(logits=prediction, labels=target), dtype=tf.float32)
     return res
@@ -147,21 +153,33 @@ def compute_loss(network: Network, batch, weight_decay: float):
 
             hidden_state = scale_gradient(hidden_state, 0.5)
 
-        for k, (prediction, target) in enumerate(zip(predictions, targets)):
-            gradient_scale, network_output = prediction
-            target_value, target_reward, target_policy = target
+        target_values, target_rewards, target_polices = zip(*targets)
+        gradient_scale, network_output = zip(*predictions)
 
-            if not target_policy:  # How to treat absorbing states? Just pass?
-                continue
+        values, rewards, logits, hidden_state = zip(*network_output)
+        logits = [tuple(x.values()) for x in logits]
 
-            local_loss = tf.nn.softmax_cross_entropy_with_logits(
-                logits=tf.stack(list(network_output.policy_logits.values())), labels=target_policy)
+        target_polices = [v if v else [0, 0] for v in target_polices[:len(logits)]]
 
-            local_loss += scalar_loss(network_output.value, target_value)
-            if k > 0:
-                local_loss += scalar_loss(network_output.reward, target_reward)
+        try:
+            local_loss = tf.nn.softmax_cross_entropy_with_logits(labels=target_polices, logits=logits)
+        except Exception:
+            print(logits)
+            print(target_polices)
 
-            loss += scale_gradient(local_loss, gradient_scale)
+        try:
+            local_loss += scalar_loss(values, target_values)
+        except Exception:
+            print(values)
+            print(target_values)
+
+        try:
+            local_loss += scalar_loss(rewards, target_rewards)
+        except Exception:
+            print(rewards)
+            print(target_rewards)
+
+        loss += tf.reduce_mean(scale_gradient(local_loss, tf.convert_to_tensor(gradient_scale)))
     loss /= len(batch)
 
     for weights in network.get_weights():
@@ -194,7 +212,7 @@ def muzero(config: MuZeroConfig):
     thread_games = Thread(target=run_selfplay, args=(config, replay_buffer))
     thread_games.start()
 
-    while len(replay_buffer.buffer_tmp) < 1:
+    while len(replay_buffer.buffer_tmp) < 10:
         pass
 
     train_network(config, storage, replay_buffer)
