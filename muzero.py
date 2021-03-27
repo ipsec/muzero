@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-import pickle
 
 import gym
 import numpy as np
@@ -18,7 +17,7 @@ from games.game import ReplayBuffer, Game, make_atari_config
 from mcts import Node, expand_node, backpropagate, add_exploration_noise, run_mcts, select_action
 from models.network import Network
 from storage import SharedStorage
-from utils import MinMaxStats, tf_scalar_to_support_batch
+from utils import MinMaxStats, tf_scalar_to_support
 from utils.exports import export_models
 
 
@@ -31,9 +30,11 @@ def write_summary_score(step):
 
 
 def run_selfplay(config: MuZeroConfig, replay_buffer: ReplayBuffer):
-    with Pool(int(np.ceil(cpu_count() / 2))) as pool:
+    # with Pool(int(np.ceil(cpu_count() / 2))) as pool:
+    with Pool(1) as pool:
         while True:
-            results = [pool.apply_async(func=play_game, args=(config,)) for _ in range(config.num_actors)]
+            counter = len(replay_buffer.buffer) + len(replay_buffer.buffer_tmp)
+            results = [pool.apply_async(func=play_game, args=(config, counter)) for _ in range(config.num_actors)]
             for p in results:
                 game = p.get()
                 replay_buffer.save_game(game)
@@ -49,10 +50,11 @@ def run_selfplay(config: MuZeroConfig, replay_buffer: ReplayBuffer):
 # Each game is produced by starting at the initial board position, then
 # repeatedly executing a Monte Carlo Tree Search to generate moves until the end
 # of the game is reached.
-def play_game(config: MuZeroConfig) -> Game:
+def play_game(config: MuZeroConfig, counter: int) -> Game:
     game = Game(config.discount)
     network = Network(config)
-    network.restore_checkpoint()
+    network.restore()
+    network.training_steps_set(counter)
 
     while not game.terminal() and len(game.history) < config.max_moves:
         min_max_stats = MinMaxStats(config.known_bounds)
@@ -103,15 +105,15 @@ def train_network(config: MuZeroConfig,
         t.set_description(desc)
         t.refresh()
 
-        if i % config.checkpoint_interval == 0:
-            storage.save_network(i, network)
-            network.save_checkpoint()
-            replay_buffer.update_main()
-
         batch = replay_buffer.sample_batch(config.num_unroll_steps, config.td_steps)
         loss = update_weights(optimizer, network, batch, config.weight_decay)
         train_loss(loss)
         write_summary_score(i)
+
+        if i % config.checkpoint_interval == 0:
+            storage.save_network(i, network)
+            network.save_checkpoint()
+            replay_buffer.update_main()
 
     storage.save_network(config.training_steps, network)
 
@@ -122,19 +124,23 @@ def scale_gradient(tensor, scale):
 
 
 def scalar_loss(prediction, target):
+    prediction = tf.cast(prediction, dtype=tf.float64)
+    target = tf.cast(target, dtype=tf.float64)
+    target = tf.experimental.numpy.atleast_2d(target)
+    prediction = tf.experimental.numpy.atleast_2d(prediction)
 
-    # Some target or prediction with None value, removing it
-    target = [v for v in target if v is not None]
-    prediction = [v for v in prediction if v is not None]
-
-    target = tf.experimental.numpy.atleast_2d(target[:len(prediction)])
-    prediction = tf.experimental.numpy.atleast_2d(prediction[:len(target)])
-
-    target = tf_scalar_to_support_batch(target, 20)
-    prediction = tf_scalar_to_support_batch(prediction, 20)
+    target = tf_scalar_to_support(target, 20)
+    prediction = tf_scalar_to_support(prediction, 20)
 
     res = tf.cast(tf.nn.softmax_cross_entropy_with_logits(logits=prediction, labels=target), dtype=tf.float32)
     return res
+
+
+def scalar_loss_mse(y_true, y_pred):
+    y_true = tf.constant(y_true, dtype=tf.float32, shape=(1, 1))
+    y_pred = tf.constant(y_pred, dtype=tf.float32, shape=(1, 1))
+    mse = tf.keras.losses.MeanSquaredError()
+    return mse(y_true, y_pred)
 
 
 def compute_loss(network: Network, batch, weight_decay: float):
@@ -153,33 +159,25 @@ def compute_loss(network: Network, batch, weight_decay: float):
 
             hidden_state = scale_gradient(hidden_state, 0.5)
 
-        target_values, target_rewards, target_polices = zip(*targets)
-        gradient_scale, network_output = zip(*predictions)
+        for k, (prediction, target) in enumerate(zip(predictions, targets)):
+            gradient_scale, network_output = prediction
+            target_value, target_reward, target_policy = target
 
-        values, rewards, logits, hidden_state = zip(*network_output)
-        logits = [tuple(x.values()) for x in logits]
+            local_loss = 0.
 
-        target_polices = [v if v else [0, 0] for v in target_polices[:len(logits)]]
+            if target_policy:  # How to treat absorbing states? Just pass?
+                policy_logits = tf.stack(list(network_output.policy_logits.values()))
+                target_policy = tf.convert_to_tensor(target_policy)
+                local_loss = tf.nn.softmax_cross_entropy_with_logits(target_policy, policy_logits)
 
-        try:
-            local_loss = tf.nn.softmax_cross_entropy_with_logits(labels=target_polices, logits=logits)
-        except Exception:
-            print(logits)
-            print(target_polices)
+            # local_loss += scalar_loss(network_output.value, target_value)
+            local_loss += scalar_loss_mse(target_value, network_output.value)
 
-        try:
-            local_loss += scalar_loss(values, target_values)
-        except Exception:
-            print(values)
-            print(target_values)
+            if k > 0:
+                # local_loss += scalar_loss(network_output.reward, target_reward)
+                local_loss += scalar_loss_mse(target_reward, network_output.reward)
 
-        try:
-            local_loss += scalar_loss(rewards, target_rewards)
-        except Exception:
-            print(rewards)
-            print(target_rewards)
-
-        loss += tf.reduce_mean(scale_gradient(local_loss, tf.convert_to_tensor(gradient_scale)))
+            loss += scale_gradient(local_loss, gradient_scale)
     loss /= len(batch)
 
     for weights in network.get_weights():
@@ -188,18 +186,14 @@ def compute_loss(network: Network, batch, weight_decay: float):
     return loss
 
 
-def get_variables(network):
-    parts = (network.f_prediction, network.g_dynamics, network.h_representation)
-    return [v for v_list in map(lambda n: n.trainable_weights, parts) for v in v_list]
-
-
 def update_weights(optimizer: tf.optimizers.Optimizer, network: Network, batch, weight_decay: float):
     with tf.GradientTape() as tape:
         loss = compute_loss(network, batch, weight_decay)
 
     train_loss(loss)
-    grads = tape.gradient(loss, get_variables(network))
-    optimizer.apply_gradients(zip(grads, get_variables(network)))
+    variables = network.get_variables()
+    grads = tape.gradient(loss, variables)
+    optimizer.apply_gradients(zip(grads, variables))
 
     network.increment_training_steps()
     return loss
@@ -212,8 +206,10 @@ def muzero(config: MuZeroConfig):
     thread_games = Thread(target=run_selfplay, args=(config, replay_buffer))
     thread_games.start()
 
-    while len(replay_buffer.buffer_tmp) < 10:
+    while len(replay_buffer.buffer_tmp) < 1:
         pass
+
+    replay_buffer.update_main()
 
     train_network(config, storage, replay_buffer)
     export_models(storage.latest_network())

@@ -1,16 +1,14 @@
 from abc import ABC
 from pathlib import Path
-from typing import Callable, List
+from typing import List
 
 import tensorflow as tf
-from tensorflow.keras.initializers import Zeros, RandomUniform
-from tensorflow.keras.layers import Dense
+from tensorflow.keras.layers import Dense, InputLayer
 from tensorflow.keras.models import Model
 
 from config import MuZeroConfig
 from games.game import Action
 from models import NetworkOutput
-from utils import tf_support_to_scalar
 
 
 def scale(t: tf.Tensor):
@@ -29,26 +27,11 @@ class Dynamics(Model, ABC):
         """
         super(Dynamics, self).__init__()
         neurons = 20
-        reward_initializer = Zeros()
-        self.s_inputs = Dense(enc_space_size,
-                              input_shape=(enc_space_size,),
-                              name="g_s_input")
-        self.s_hidden = Dense(neurons,
-                              name="g_s_hidden")
-        self.s_k = Dense(hidden_state_size,
-                         activation=tf.nn.tanh,
-                         name="g_s_k")
-
-        self.r_inputs = Dense(enc_space_size,
-                              input_shape=(enc_space_size,),
-                              kernel_initializer=reward_initializer,
-                              name="g_r_input")
-        self.r_hidden = Dense(neurons,
-                              kernel_initializer=reward_initializer,
-                              name="g_r_hidden")
-        self.r_k = Dense(41,
-                         kernel_initializer=reward_initializer,
-                         name="g_r_k")
+        self.inputs = InputLayer(input_shape=(enc_space_size,), name="g_inputs")
+        self.hidden = Dense(neurons, activation=tf.nn.relu, name="g_hidden")
+        self.common = Dense(neurons, activation=tf.nn.relu, name="g_common")
+        self.s_k = Dense(hidden_state_size, activation=tf.nn.tanh, name="g_s_k")
+        self.r_k = Dense(1, name="g_r_k")
 
     @tf.function
     def call(self, encoded_space, **kwargs):
@@ -57,13 +40,11 @@ class Dynamics(Model, ABC):
         :param encoded_space: hidden state concatenated with one_hot action
         :return: NetworkOutput with reward (r^k) and hidden state (s^k)
         """
-        s = self.s_inputs(encoded_space)
-        s = self.s_hidden(s)
-        s_k = self.s_k(s)
-
-        r = self.r_inputs(encoded_space)
-        r = self.r_hidden(r)
-        r_k = self.r_k(r)
+        x = self.inputs(encoded_space)
+        x = self.hidden(x)
+        x = self.common(x)
+        s_k = self.s_k(x)
+        r_k = self.r_k(x)
 
         return s_k, r_k
 
@@ -76,29 +57,11 @@ class Prediction(Model, ABC):
         """
         super(Prediction, self).__init__()
         neurons = 20
-        policy_initializer = RandomUniform(minval=0., maxval=1.)
-        value_initializer = Zeros()
-        self.p_inputs = Dense(hidden_state_size,
-                              input_shape=(hidden_state_size,),
-                              kernel_initializer=policy_initializer,
-                              name="f_p_inputs")
-        self.p_hidden = Dense(neurons,
-                              kernel_initializer=policy_initializer,
-                              name="f_p_hidden")
-        self.policy = Dense(action_state_size,
-                            kernel_initializer=policy_initializer,
-                            name="f_policy")
-
-        self.v_inputs = Dense(hidden_state_size,
-                              input_shape=(hidden_state_size,),
-                              kernel_initializer=value_initializer,
-                              name="f_v_inputs")
-        self.v_hidden = Dense(neurons,
-                              kernel_initializer=value_initializer,
-                              name="f_v_hidden")
-        self.value = Dense(41,
-                           kernel_initializer=value_initializer,
-                           name="f_value")
+        self.inputs = InputLayer(input_shape=(hidden_state_size,), name="f_inputs")
+        self.hidden = Dense(neurons, activation=tf.nn.relu, name="f_hidden")
+        self.common = Dense(neurons, activation=tf.nn.relu, name="f_common")
+        self.policy = Dense(action_state_size, name="f_policy")
+        self.value = Dense(1, name="f_value")
 
     @tf.function
     def call(self, hidden_state, **kwargs):
@@ -106,13 +69,12 @@ class Prediction(Model, ABC):
         :param hidden_state
         :return: NetworkOutput with policy logits and value
         """
-        p = self.p_inputs(hidden_state)
-        p = self.p_hidden(p)
-        policy = self.policy(p)
+        x = self.inputs(hidden_state)
+        x = self.hidden(x)
+        x = self.common(x)
 
-        v = self.v_inputs(hidden_state)
-        v = self.v_hidden(v)
-        value = self.value(v)
+        policy = self.policy(x)
+        value = self.value(x)
 
         return policy, value
 
@@ -125,14 +87,10 @@ class Representation(Model, ABC):
         """
         super(Representation, self).__init__()
         neurons = 20
-        self.inputs = Dense(obs_space_size,
-                            input_shape=(obs_space_size,),
-                            name="h_inputs")
-        self.hidden = Dense(neurons,
-                            name="h_hidden1")
-        self.s0 = Dense(obs_space_size,
-                        activation=tf.nn.tanh,
-                        name="h_s0")
+        self.inputs = InputLayer(input_shape=(obs_space_size,), name="h_inputs")
+        self.hidden = Dense(neurons, activation=tf.nn.relu, name="h_hidden")
+        self.common = Dense(neurons, activation=tf.nn.relu, name="h_common")
+        self.s0 = Dense(obs_space_size, activation=tf.nn.tanh, name="h_s0")
 
     @tf.function
     def call(self, observation, **kwargs):
@@ -142,6 +100,7 @@ class Representation(Model, ABC):
         """
         x = self.inputs(observation)
         x = self.hidden(x)
+        x = self.common(x)
         s_0 = self.s0(x)
         return s_0
 
@@ -154,41 +113,30 @@ class Network(object):
         self.h_representation = Representation(config.state_space_size)
         self._training_steps = 0
 
-        self.g_dynamics_checkpoint = tf.train.Checkpoint(model=self.g_dynamics)
-        self.f_prediction_checkpoint = tf.train.Checkpoint(model=self.f_prediction)
-        self.h_representation_checkpoint = tf.train.Checkpoint(model=self.h_representation)
-
-        self.g_dynamics_checkpoint_path = './checkpoints/muzero/Dynamics'
-        Path.mkdir(Path(self.g_dynamics_checkpoint_path), parents=True, exist_ok=True)
-        self.manager_dynamics = tf.train.CheckpointManager(self.g_dynamics_checkpoint,
-                                                           directory=self.g_dynamics_checkpoint_path,
-                                                           max_to_keep=5)
-
-        self.f_prediction_checkpoint_path = './checkpoints/muzero/Prediction'
-        Path.mkdir(Path(self.f_prediction_checkpoint_path), parents=True, exist_ok=True)
-        self.manager_prediction = tf.train.CheckpointManager(self.f_prediction_checkpoint,
-                                                             directory=self.f_prediction_checkpoint_path,
-                                                             max_to_keep=5)
-
-        self.h_representation_checkpoint_path = './checkpoints/muzero/Representation'
-        Path.mkdir(Path(self.h_representation_checkpoint_path), parents=True, exist_ok=True)
-        self.manager_representation = tf.train.CheckpointManager(self.h_representation_checkpoint,
-                                                                 directory=self.h_representation_checkpoint_path,
-                                                                 max_to_keep=5)
+        self.f_prediction_path = './checkpoints/muzero/Prediction'
+        self.g_dynamics_path = './checkpoints/muzero/Dynamics'
+        self.h_representation_path = './checkpoints/muzero/Representation'
+        Path.mkdir(Path(self.f_prediction_path), parents=True, exist_ok=True)
+        Path.mkdir(Path(self.g_dynamics_path), parents=True, exist_ok=True)
+        Path.mkdir(Path(self.h_representation_path), parents=True, exist_ok=True)
 
     def save_checkpoint(self):
-        self.manager_dynamics.save()
-        self.manager_prediction.save()
-        self.manager_representation.save()
+        self.f_prediction.save(self.f_prediction_path)
+        self.g_dynamics.save(self.g_dynamics_path)
+        self.h_representation.save(self.h_representation_path)
 
-    def restore_checkpoint(self):
-        self.g_dynamics_checkpoint.restore(self.manager_dynamics.latest_checkpoint)
-        self.f_prediction_checkpoint.restore(self.manager_prediction.latest_checkpoint)
-        self.h_representation_checkpoint.restore(self.manager_representation.latest_checkpoint)
+    def restore(self):
+        try:
+            self.f_prediction = tf.keras.models.load_model(self.f_prediction_path, compile=False)
+        except OSError:
+            """
+            If model not trained yet, the saved model doesn't exists yet, then just pass
+            """
+            pass
 
     def prepare_observation(self, observation: tf.Tensor) -> tf.Tensor:
         observation = tf.expand_dims(observation, 0)
-        # observation = scale(observation)
+        observation = scale(observation)
         observation = tf.cast(observation, dtype=tf.float32)
         return observation
 
@@ -203,7 +151,7 @@ class Network(object):
         # prediction
         p, v = self.f_prediction(s_0)
 
-        v = tf_support_to_scalar(v, 20)
+        # v = tf_support_to_scalar(v, 20)
 
         return NetworkOutput(
             value=float(v.numpy()),
@@ -212,10 +160,10 @@ class Network(object):
             hidden_state=s_0,
         )
 
-    @tf.function
     def encode_state(self, hidden_state: tf.Tensor, action: int, action_space_size: int) -> tf.Tensor:
         one_hot = tf.expand_dims(tf.one_hot(action, action_space_size), 0)
         encoded_state = tf.concat([hidden_state, one_hot], axis=1)
+        # scale(encoded_state)
         return encoded_state
 
     def recurrent_inference(self, hidden_state, action: Action) -> NetworkOutput:
@@ -226,11 +174,11 @@ class Network(object):
         s_k, r_k = self.g_dynamics(encoded_state)
         # s_k = scale(s_k)
 
-        r_k = tf_support_to_scalar(r_k, 20)
+        # r_k = tf_support_to_scalar(r_k, 20)
 
         # prediction
         p, v = self.f_prediction(s_k)
-        v = tf_support_to_scalar(v, 20)
+        # v = tf_support_to_scalar(v, 20)
 
         return NetworkOutput(
             value=float(v.numpy()),
@@ -239,22 +187,13 @@ class Network(object):
             hidden_state=s_k
         )
 
-    def get_weights(self) -> List:
-        networks = [self.g_dynamics, self.f_prediction, self.h_representation]
-        return [variables
-                for variables_list in map(lambda n: n.weights, networks)
-                for variables in variables_list]
+    def get_weigths(self) -> List:
+        networks = (self.f_prediction, self.g_dynamics, self.h_representation)
+        return [variable for network in networks for variable in network.weights]
 
-    def cb_get_variables(self) -> Callable:
-        """Return a callback that return the trainable variables of the network."""
-
-        def get_variables():
-            networks = [self.g_dynamics, self.f_prediction, self.h_representation]
-            return [variables
-                    for variables_list in map(lambda n: n.weights, networks)
-                    for variables in variables_list]
-
-        return get_variables
+    def get_variables(self):
+        networks = (self.f_prediction, self.g_dynamics, self.h_representation)
+        return [variable for network in networks for variable in network.trainable_variables]
 
     def get_networks(self) -> List:
         return [self.g_dynamics, self.f_prediction, self.h_representation]
@@ -266,11 +205,8 @@ class Network(object):
     def training_steps_counter(self) -> int:
         return self._training_steps
 
+    def training_steps_set(self, value: int):
+        self._training_steps = value
+
     def increment_training_steps(self):
         self._training_steps += 1
-
-    def get_variables_by_network(self):
-        return [[x.trainable_variables] for x in [self.g_dynamics, self.f_prediction, self.h_representation]]
-
-    def get_variables(self):
-        return [x.trainable_variables for x in [self.g_dynamics, self.f_prediction, self.h_representation]]
