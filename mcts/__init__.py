@@ -66,12 +66,15 @@ def select_child(config: MuZeroConfig, node: Node,
     if node.visit_count == 0:
         act = []
         prev = []
+        childs = []
         for action, child in node.children.items():
             act.append(action)
             prev.append(child.prior)
+            childs.append(child)
 
         idx = np.argmax(prev)
         action = act[int(idx)]
+        child = childs[int(idx)]
 
     return action, child
 

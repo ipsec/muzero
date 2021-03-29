@@ -61,7 +61,7 @@ def tf_scalar_to_support(x: tf.Tensor,
     if support_size == 0:  # Simple regression (support in this case can be the mean of a Gaussian)
         return x
 
-    # x = reward_transformer(x, **kwargs)
+    x = reward_transformer(x, **kwargs)
 
     transformed = tf.clip_by_value(x, -support_size, support_size - 1e-6)
     floored = tf.floor(transformed)
@@ -112,6 +112,5 @@ def tf_support_to_scalar(x: tf.Tensor, support_size: int,
 
     bins = tf.range(-support_size, support_size + 1, dtype=tf.float32)
     value = tf.tensordot(tf.squeeze(x), tf.squeeze(bins), 1)
-    return value
 
-    # return inv_reward_transformer(value, **kwargs)
+    return inv_reward_transformer(value, **kwargs)

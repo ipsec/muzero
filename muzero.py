@@ -58,7 +58,7 @@ def play_game(config: MuZeroConfig, network: Network) -> Game:
         current_observation = game.make_image(-1)
         network_output = network.initial_inference(current_observation)
         expand_node(root, game.to_play(), game.legal_actions(), network_output)
-        # backpropagate([root], network_output.value, game.to_play(), config.discount, min_max_stats)
+        backpropagate([root], network_output.value, game.to_play(), config.discount, min_max_stats)
         add_exploration_noise(config, root)
 
         # We then run a Monte Carlo Tree Search using only action sequences and the
@@ -129,8 +129,8 @@ def scalar_loss_batch(prediction, target):
     target = tf.cast(target, dtype=tf.float64)
     target = tf.experimental.numpy.atleast_2d(target)
 
-    target = tf_scalar_to_support_batch(target, 20)
-    prediction = tf_scalar_to_support_batch(prediction, 20)
+    target = tf_scalar_to_support_batch(target, 300)
+    prediction = tf_scalar_to_support_batch(prediction, 300)
 
     return tf.cast(tf.nn.softmax_cross_entropy_with_logits(logits=prediction, labels=target), dtype=tf.float32)
 
@@ -140,8 +140,8 @@ def scalar_loss(prediction, target, with_support: bool = False):
     prediction = tf.cast([[prediction]], dtype=tf.float32)
 
     if with_support:
-        target = tf_scalar_to_support(target, 20)
-        prediction = tf_scalar_to_support(prediction, 20)
+        target = tf_scalar_to_support(target, 300)
+        prediction = tf_scalar_to_support(prediction, 300)
         return tf.nn.softmax_cross_entropy_with_logits(logits=prediction, labels=target)
 
     # Without Support use only MSE
@@ -174,12 +174,12 @@ def compute_loss(network: Network, batch, weight_decay: float):
                 policy_logits = tf.stack(list(network_output.policy_logits.values()))
                 policy_loss = tf.nn.softmax_cross_entropy_with_logits(logits=policy_logits, labels=target_policy)
 
-            value_loss = scalar_loss(network_output.value, target_value, with_support=False)
+            value_loss = scalar_loss(network_output.value, target_value, with_support=True)
 
             reward_loss = 0.
 
             if k > 0:
-                reward_loss += scalar_loss(network_output.reward, target_reward, with_support=False)
+                reward_loss += scalar_loss(network_output.reward, target_reward, with_support=True)
 
             local_loss = tf.reduce_sum(policy_loss + value_loss + reward_loss)
 
