@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-from copy import deepcopy
 from pathlib import Path
 
 import gym
@@ -39,12 +38,13 @@ def run_selfplay(config: MuZeroConfig, storage: SharedStorage,
     # while True:
     network = storage.latest_network()
     game = play_game(config, network)
+    train_score_mean(tf.reduce_sum(game.rewards))
+    train_score_current(tf.reduce_sum(game.rewards))
     replay_buffer.save_game(game)
 
 
 # Each game is produced by starting at the initial board position, then
 # repeatedly executing a Monte Carlo Tree Search to generate moves until the end
-# of the game is reached.
 # of the game is reached.
 def play_game(config: MuZeroConfig, network: Network) -> Game:
     game = Game(config.discount)
@@ -67,14 +67,14 @@ def play_game(config: MuZeroConfig, network: Network) -> Game:
         action = select_action(root, network)
         game.apply(action)
         game.store_search_statistics(root)
+
     return game
 
 
 def train_network(config: MuZeroConfig,
                   storage: SharedStorage,
                   replay_buffer: ReplayBuffer):
-    network = storage.latest_network()
-    storage.save_network(0, network)
+    network = Network(config)
 
     lr_schedule = ExponentialDecay(
         initial_learning_rate=config.lr_init,
@@ -106,8 +106,8 @@ def train_network(config: MuZeroConfig,
             write_summary_score(mean_count)
             mean_count += 1
 
-            storage.save_network(i, deepcopy(network))
-            network.save_checkpoint()
+            storage.save_network(i, network)
+            # network.save_checkpoint()
 
         batch = replay_buffer.sample_batch(config.num_unroll_steps, config.td_steps)
         loss = update_weights(optimizer, network, batch, config.weight_decay)
@@ -124,9 +124,10 @@ def scale_gradient(tensor, scale):
 
 def scalar_loss_batch(prediction, target):
     prediction = tf.cast(prediction, dtype=tf.float64)
+    prediction = tf.experimental.numpy.atleast_2d(prediction)
+
     target = tf.cast(target, dtype=tf.float64)
     target = tf.experimental.numpy.atleast_2d(target)
-    prediction = tf.experimental.numpy.atleast_2d(prediction)
 
     target = tf_scalar_to_support_batch(target, 20)
     prediction = tf_scalar_to_support_batch(prediction, 20)
@@ -134,27 +135,21 @@ def scalar_loss_batch(prediction, target):
     return tf.cast(tf.nn.softmax_cross_entropy_with_logits(logits=prediction, labels=target), dtype=tf.float32)
 
 
-def scalar_loss(prediction, target):
-    prediction = tf.cast(prediction, dtype=tf.float64)
-    target = tf.cast(target, dtype=tf.float64)
-    target = tf.experimental.numpy.atleast_2d(target)
-    prediction = tf.experimental.numpy.atleast_2d(prediction)
+def scalar_loss(prediction, target, with_support: bool = False):
+    target = tf.cast([[target]], dtype=tf.float32)
+    prediction = tf.cast([[prediction]], dtype=tf.float32)
 
-    target = tf_scalar_to_support(target, 20)
-    prediction = tf_scalar_to_support(prediction, 20)
+    if with_support:
+        target = tf_scalar_to_support(target, 20)
+        prediction = tf_scalar_to_support(prediction, 20)
+        return tf.nn.softmax_cross_entropy_with_logits(logits=prediction, labels=target)
 
-    return tf.cast(tf.nn.softmax_cross_entropy_with_logits(logits=prediction, labels=target), dtype=tf.float32)
-
-
-def scalar_loss_mse(y_true, y_pred):
-    y_true = tf.constant(y_true, dtype=tf.float32, shape=(1, 1))
-    y_pred = tf.constant(y_pred, dtype=tf.float32, shape=(1, 1))
-    mse = tf.keras.losses.MeanSquaredError()
-    return mse(y_true, y_pred)
+    # Without Support use only MSE
+    return tf.reduce_sum(tf.losses.MSE(target, prediction))
 
 
 def compute_loss(network: Network, batch, weight_decay: float):
-    loss = 0.
+    loss = 0
     for image, actions, targets in batch:
         # Initial step, from the real observation.
         network_output = network.initial_inference(image)
@@ -169,37 +164,32 @@ def compute_loss(network: Network, batch, weight_decay: float):
 
             hidden_state = scale_gradient(hidden_state, 0.5)
 
-        target_values, target_rewards, target_policys = zip(*targets)
-        gradient_scale, network_output = zip(*predictions)
-        values, rewards, policy_logits, hidden_state = zip(*network_output)
+        for k, (prediction, target) in enumerate(zip(predictions, targets)):
+            gradient_scale, network_output = prediction
+            target_value, target_reward, target_policy = target
 
+            if target_reward != 1.0 and target_reward != 0.0:
+                print(f"value: {target_value}")
+                print(f"reward: {target_reward}")
+                print(f"policy: {target_policy}")
+                print("##########################")
 
-        # Policy
-        policy_logits = [list(p.values()) for p in policy_logits]
-        mask_policy = list(map(lambda l: bool(l), target_policys))
-        target_policy_batch = list(filter(lambda l: bool(l), target_policys))
-        policy_logits = tf.boolean_mask(policy_logits, mask_policy[:len(policy_logits)])
+            policy_loss = 0.
 
-        policy_loss = tf.nn.softmax_cross_entropy_with_logits(logits=policy_logits, labels=target_policy_batch)
-        policy_gradient_scale = tf.boolean_mask(gradient_scale, mask_policy[:len(gradient_scale)])
-        policy_loss = scale_gradient(policy_loss,  policy_gradient_scale)
+            if target_policy:
+                policy_logits = tf.stack(list(network_output.policy_logits.values()))
+                policy_loss = tf.nn.softmax_cross_entropy_with_logits(logits=policy_logits, labels=target_policy)
 
-        # Value
-        value_loss = scalar_loss_batch(target_values[:len(values)], values)
-        mask_value = list(map(lambda l: bool(l), target_values))
-        value_gradient_scale = tf.boolean_mask(gradient_scale, [True] * len(value_loss))
-        value_loss = scale_gradient(value_loss, value_gradient_scale)
+            value_loss = scalar_loss(network_output.value, target_value, with_support=False)
 
-        # Reward
-        mask_reward = list(map(lambda l: bool(l), target_rewards))
-        target_reward_batch = list(filter(lambda l: bool(l), target_rewards))
-        rewards = tf.boolean_mask(rewards, mask_reward[:len(rewards)])
-        reward_loss = scalar_loss_batch(target_reward_batch, rewards)
-        reward_gradient_scale = tf.boolean_mask(gradient_scale, mask_reward[:len(gradient_scale)])
-        reward_loss = [scale_gradient(v, s) for v, s in zip(reward_loss, reward_gradient_scale)]
+            reward_loss = 0.
 
-        # sum losses (rewards only k > 0)
-        loss += tf.reduce_mean(policy_loss) + tf.reduce_mean(value_loss) + tf.reduce_mean(reward_loss[1:])
+            if k > 0:
+                reward_loss += scalar_loss(network_output.reward, target_reward, with_support=False)
+
+            local_loss = tf.reduce_sum(policy_loss + value_loss + reward_loss)
+
+            loss += scale_gradient(local_loss, gradient_scale)
 
     loss /= len(batch)
 
@@ -214,9 +204,9 @@ def update_weights(optimizer: tf.optimizers.Optimizer, network: Network, batch, 
         loss = compute_loss(network, batch, weight_decay)
 
     train_loss(loss)
-    variables = network.get_variables()
-    grads = tape.gradient(loss, variables)
-    optimizer.apply_gradients(zip(grads, variables))
+
+    grads = tape.gradient(loss, network.get_variables())
+    optimizer.apply_gradients(zip(grads, network.get_variables()))
 
     network.increment_training_steps()
     return loss
@@ -233,12 +223,13 @@ def muzero(config: MuZeroConfig):
 if __name__ == "__main__":
     np.random.seed(12345)
     train_loss = tf.keras.metrics.Mean('train_loss', dtype=tf.float32)
-    train_score_current = tf.keras.metrics.Mean('train_score_current', dtype=tf.float32)
     train_score_mean = tf.keras.metrics.Mean('train_score_mean', dtype=tf.float32)
+    train_score_current = tf.keras.metrics.Mean('train_score_current', dtype=tf.float32)
 
     data_path = Path("./data/muzero")
     data_path.mkdir(parents=True, exist_ok=True)
     summary_writer = tf.summary.create_file_writer(str(data_path) + "/summary/")
 
     env = gym.make('CartPole-v1')
+    # env = gym.make('LunarLander-v2')
     muzero(make_atari_config(env))

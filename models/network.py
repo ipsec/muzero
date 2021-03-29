@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import List
 
 import tensorflow as tf
-from tensorflow.keras.layers import Dense, InputLayer
+from tensorflow.keras.layers import Dense
 from tensorflow.keras.models import Model
 
 from config import MuZeroConfig
@@ -11,13 +11,12 @@ from games.game import Action
 from models import NetworkOutput
 
 
-@tf.function
 def scale(t: tf.Tensor):
     return (t - tf.reduce_min(t)) / (tf.reduce_max(t) - tf.reduce_min(t))
 
 
 def build_policy_logits(policy_logits):
-    return {Action(i): logit for i, logit in enumerate(policy_logits[0])}
+    return {Action(i): float(logit) for i, logit in enumerate(policy_logits[0])}
 
 
 class Dynamics(Model, ABC):
@@ -28,10 +27,11 @@ class Dynamics(Model, ABC):
         """
         super(Dynamics, self).__init__()
         neurons = 20
-        self.inputs = InputLayer(input_shape=(enc_space_size,), name="g_inputs")
-        self.hidden = Dense(neurons, name="g_hidden")
-        self.common = Dense(neurons, name="g_common")
-        self.s_k = Dense(hidden_state_size, name="g_s_k")
+        self.inputs = Dense(neurons, name="g_inputs", activation=tf.nn.relu)
+        # self.inputs = InputLayer(input_shape=(enc_space_size,), name="g_inputs")
+        self.hidden = Dense(neurons, name="g_hidden", activation=tf.nn.relu)
+        self.common = Dense(neurons, name="g_common", activation=tf.nn.relu)
+        self.s_k = Dense(hidden_state_size, name="g_s_k", activation=tf.nn.relu)
         self.r_k = Dense(1, name="g_r_k")
 
     @tf.function
@@ -60,10 +60,11 @@ class Prediction(Model, ABC):
         """
         super(Prediction, self).__init__()
         neurons = 20
-        self.inputs = InputLayer(input_shape=(hidden_state_size,), name="f_inputs")
-        self.hidden = Dense(neurons, name="f_hidden")
-        self.common = Dense(neurons, name="f_common")
-        self.policy = Dense(action_state_size, activation=tf.nn.sigmoid, name="f_policy")
+        self.inputs = Dense(neurons, name="f_inputs", activation=tf.nn.relu)
+        #self.inputs = InputLayer(input_shape=(hidden_state_size,), name="f_inputs")
+        self.hidden = Dense(neurons, name="f_hidden", activation=tf.nn.relu)
+        self.common = Dense(neurons, name="f_common", activation=tf.nn.relu)
+        self.policy = Dense(action_state_size, name="f_policy")
         self.value = Dense(1, name="f_value")
 
     @tf.function
@@ -90,10 +91,11 @@ class Representation(Model, ABC):
         """
         super(Representation, self).__init__()
         neurons = 20
-        self.inputs = InputLayer(input_shape=(obs_space_size,), name="h_inputs")
-        self.hidden = Dense(neurons,  name="h_hidden")
-        self.common = Dense(neurons, name="h_common")
-        self.s0 = Dense(obs_space_size, name="h_s0")
+        self.inputs = Dense(neurons, name="h_inputs", activation=tf.nn.relu)
+        # self.inputs = InputLayer(input_shape=(obs_space_size,), name="h_inputs")
+        self.hidden = Dense(neurons,  name="h_hidden", activation=tf.nn.relu)
+        self.common = Dense(neurons, name="h_common", activation=tf.nn.relu)
+        self.s0 = Dense(obs_space_size, name="h_s0", activation=tf.nn.relu)
 
     @tf.function
     def call(self, observation, **kwargs):
@@ -132,6 +134,8 @@ class Network(object):
     def restore(self):
         try:
             self.f_prediction = tf.keras.models.load_model(self.f_prediction_path, compile=False)
+            self.g_dynamics = tf.keras.models.load_model(self.g_dynamics_path, compile=False)
+            self.h_representation = tf.keras.models.load_model(self.h_representation_path, compile=False)
         except OSError:
             """
             If model not trained yet, the saved model doesn't exists yet, then just pass
@@ -141,14 +145,15 @@ class Network(object):
     def initial_inference(self, observation) -> NetworkOutput:
         # representation + prediction function
         # representation
+        observation = scale(observation)
         s_0 = self.h_representation(observation)
 
         # prediction
         p, v = self.f_prediction(s_0)
 
         return NetworkOutput(
-            value=tf.squeeze(v),
-            reward=tf.constant(0.0),
+            value=float(v.numpy()),
+            reward=0.0,
             policy_logits=build_policy_logits(policy_logits=p),
             hidden_state=s_0,
         )
@@ -169,8 +174,8 @@ class Network(object):
         p, v = self.f_prediction(s_k)
 
         return NetworkOutput(
-            value=tf.squeeze(v),
-            reward=tf.squeeze(r_k),
+            value=float(v.numpy()),
+            reward=float(r_k.numpy()),
             policy_logits=build_policy_logits(policy_logits=p),
             hidden_state=s_k
         )

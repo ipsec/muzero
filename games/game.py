@@ -1,10 +1,8 @@
-
 from collections import deque
 from typing import List
 
 import gym
 import numpy as np
-import tensorflow as tf
 from gym import Env
 
 from config import MuZeroConfig
@@ -80,7 +78,7 @@ class Game(object):
 
     def __init__(self, discount: float):
         self.env = Environment()
-        self.states = [self.reset()]
+        self.states = []
         self.history = []
         self.rewards = []
         self.child_visits = []
@@ -97,7 +95,7 @@ class Game(object):
 
     def reset(self):
         observation = self.env.reset()
-        observation = tf.expand_dims(observation, 0)
+        observation = np.atleast_2d(observation)
         return observation
 
     def legal_actions(self) -> List[Action]:
@@ -106,7 +104,10 @@ class Game(object):
     def apply(self, action: Action):
         observation, reward, done, info = self.env.step(action.index)
         self.done = done
-        self.states.append(observation)
+
+        if not done:
+            self.states.append(np.atleast_2d(observation))
+
         self.rewards.append(reward)
         self.history.append(action)
 
@@ -120,7 +121,9 @@ class Game(object):
         self.root_values.append(root.value())
 
     def make_image(self, state_index: int):
-        # Game specific feature planes.
+        if not self.states:
+            self.states.append(self.reset())
+
         return self.states[state_index]
 
     def make_target(self, state_index: int, num_unroll_steps: int, td_steps: int,
@@ -141,7 +144,7 @@ class Game(object):
             if 0 < current_index <= len(self.rewards):
                 last_reward = self.rewards[current_index - 1]
             else:
-                last_reward = None
+                last_reward = 0.
 
             if current_index < len(self.root_values):
                 targets.append((value, last_reward, self.child_visits[current_index]))
@@ -176,13 +179,14 @@ class ReplayBuffer(object):
 
     def sample_game(self) -> Game:
         return np.random.choice(self.buffer)
+        # return choice(self.buffer)
 
     def sample_position(self, game) -> int:
         return np.random.choice(len(game.history))
+        # return randrange(len(game.history))
 
 
 def make_atari_config(env: Env) -> MuZeroConfig:
-
     return MuZeroConfig(
         env=env,
         state_space_size=int(np.prod(env.observation_space.shape)),
@@ -193,9 +197,9 @@ def make_atari_config(env: Env) -> MuZeroConfig:
         num_simulations=50,  # Number of future moves self-simulated
         batch_size=128,
         td_steps=10,  # Number of steps in the future to take into account for calculating the target value
-        num_actors=2,
+        num_actors=5,
         training_steps=100000,
-        checkpoint_interval=100,
-        lr_init=0.01,
+        checkpoint_interval=10,
+        lr_init=0.001,
         lr_decay_steps=1000,
         lr_decay_rate=0.9)
