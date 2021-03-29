@@ -1,9 +1,10 @@
+
 from collections import deque
-from random import randrange, choice
 from typing import List
 
 import gym
 import numpy as np
+import tensorflow as tf
 from gym import Env
 
 from config import MuZeroConfig
@@ -55,22 +56,23 @@ class ActionHistory(object):
         return Player()
 
 
-class Environment(object):
-    """The environment MuZero is interacting with."""
+class Environment:
+
     def __init__(self):
         # self.env = gym.make('LunarLander-v2')
         self.env = gym.make('CartPole-v1')
         self.action_space_size = self.env.action_space.n
 
-    def reset(self):
-        return self.env.reset()
-
     def step(self, action):
         observation, reward, done, info = self.env.step(action)
+        observation = np.atleast_2d(observation)
         return observation, reward, done, info
 
     def close(self):
         self.env.close()
+
+    def reset(self):
+        return self.env.reset()
 
 
 class Game(object):
@@ -78,26 +80,28 @@ class Game(object):
 
     def __init__(self, discount: float):
         self.env = Environment()
-        self.states = [self.env.reset()]
+        self.states = [self.reset()]
         self.history = []
         self.rewards = []
         self.child_visits = []
         self.root_values = []
         self.action_space_size = self.env.action_space_size
         self.discount = discount
-        self.actions = list(map(lambda i: Action(i), range(self.action_space_size)))
         self.done = False
 
     def terminal(self) -> bool:
-        # Game specific termination rules.
         if self.done:
             self.env.close()
 
         return self.done
 
+    def reset(self):
+        observation = self.env.reset()
+        observation = tf.expand_dims(observation, 0)
+        return observation
+
     def legal_actions(self) -> List[Action]:
-        # Game specific calculation of legal actions.
-        return self.actions
+        return list(map(lambda i: Action(i), range(self.action_space_size)))
 
     def apply(self, action: Action):
         observation, reward, done, info = self.env.step(action.index)
@@ -159,18 +163,9 @@ class ReplayBuffer(object):
         self.window_size = config.window_size
         self.batch_size = config.batch_size
         self.buffer = deque(maxlen=self.window_size)
-        self.buffer_tmp = deque(maxlen=self.window_size)
-
-    def update_main(self):
-        """
-        Update self.buffer with recent played games
-        :return: None
-        """
-        self.buffer += self.buffer_tmp
-        self.buffer_tmp.clear()
 
     def save_game(self, game):
-        self.buffer_tmp.append(game)
+        self.buffer.append(game)
 
     def sample_batch(self, num_unroll_steps: int, td_steps: int):
         games = [self.sample_game() for _ in range(self.batch_size)]
@@ -181,11 +176,9 @@ class ReplayBuffer(object):
 
     def sample_game(self) -> Game:
         return np.random.choice(self.buffer)
-        #return choice(self.buffer)
 
     def sample_position(self, game) -> int:
         return np.random.choice(len(game.history))
-        #return randrange(len(game.history))
 
 
 def make_atari_config(env: Env) -> MuZeroConfig:
@@ -200,9 +193,9 @@ def make_atari_config(env: Env) -> MuZeroConfig:
         num_simulations=50,  # Number of future moves self-simulated
         batch_size=128,
         td_steps=10,  # Number of steps in the future to take into account for calculating the target value
-        num_actors=10,
+        num_actors=2,
         training_steps=100000,
-        checkpoint_interval=10,
-        lr_init=0.001,
+        checkpoint_interval=100,
+        lr_init=0.01,
         lr_decay_steps=1000,
         lr_decay_rate=0.9)

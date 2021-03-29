@@ -55,6 +55,7 @@ def inverse_scalar_transform(x: float, eps: float = 0.001) -> tf.Tensor:
     return tf.math.sign(x) * (((tf.math.sqrt(1. + 4. * eps * (tf.math.abs(x) + 1 + eps)) - 1) / (2 * eps)) ** 2 - 1)
 
 
+@tf.function
 def tf_scalar_to_support(x: tf.Tensor,
                          support_size: int,
                          reward_transformer: typing.Callable = scalar_transform, **kwargs) -> tf.Tensor:

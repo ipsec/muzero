@@ -11,6 +11,7 @@ from games.game import Action
 from models import NetworkOutput
 
 
+@tf.function
 def scale(t: tf.Tensor):
     return (t - tf.reduce_min(t)) / (tf.reduce_max(t) - tf.reduce_min(t))
 
@@ -28,9 +29,9 @@ class Dynamics(Model, ABC):
         super(Dynamics, self).__init__()
         neurons = 20
         self.inputs = InputLayer(input_shape=(enc_space_size,), name="g_inputs")
-        self.hidden = Dense(neurons, activation=tf.nn.relu, name="g_hidden")
-        self.common = Dense(neurons, activation=tf.nn.relu, name="g_common")
-        self.s_k = Dense(hidden_state_size, activation=tf.nn.tanh, name="g_s_k")
+        self.hidden = Dense(neurons, name="g_hidden")
+        self.common = Dense(neurons, name="g_common")
+        self.s_k = Dense(hidden_state_size, name="g_s_k")
         self.r_k = Dense(1, name="g_r_k")
 
     @tf.function
@@ -44,6 +45,8 @@ class Dynamics(Model, ABC):
         x = self.hidden(x)
         x = self.common(x)
         s_k = self.s_k(x)
+        s_k = scale(s_k)
+
         r_k = self.r_k(x)
 
         return s_k, r_k
@@ -58,9 +61,9 @@ class Prediction(Model, ABC):
         super(Prediction, self).__init__()
         neurons = 20
         self.inputs = InputLayer(input_shape=(hidden_state_size,), name="f_inputs")
-        self.hidden = Dense(neurons, activation=tf.nn.relu, name="f_hidden")
-        self.common = Dense(neurons, activation=tf.nn.relu, name="f_common")
-        self.policy = Dense(action_state_size, name="f_policy")
+        self.hidden = Dense(neurons, name="f_hidden")
+        self.common = Dense(neurons, name="f_common")
+        self.policy = Dense(action_state_size, activation=tf.nn.sigmoid, name="f_policy")
         self.value = Dense(1, name="f_value")
 
     @tf.function
@@ -88,9 +91,9 @@ class Representation(Model, ABC):
         super(Representation, self).__init__()
         neurons = 20
         self.inputs = InputLayer(input_shape=(obs_space_size,), name="h_inputs")
-        self.hidden = Dense(neurons, activation=tf.nn.relu, name="h_hidden")
-        self.common = Dense(neurons, activation=tf.nn.relu, name="h_common")
-        self.s0 = Dense(obs_space_size, activation=tf.nn.tanh, name="h_s0")
+        self.hidden = Dense(neurons,  name="h_hidden")
+        self.common = Dense(neurons, name="h_common")
+        self.s0 = Dense(obs_space_size, name="h_s0")
 
     @tf.function
     def call(self, observation, **kwargs):
@@ -102,6 +105,7 @@ class Representation(Model, ABC):
         x = self.hidden(x)
         x = self.common(x)
         s_0 = self.s0(x)
+        s_0 = scale(s_0)
         return s_0
 
 
@@ -134,28 +138,17 @@ class Network(object):
             """
             pass
 
-    def prepare_observation(self, observation: tf.Tensor) -> tf.Tensor:
-        observation = tf.expand_dims(observation, 0)
-        observation = scale(observation)
-        observation = tf.cast(observation, dtype=tf.float32)
-        return observation
-
     def initial_inference(self, observation) -> NetworkOutput:
         # representation + prediction function
         # representation
-        observation = self.prepare_observation(observation)
-
         s_0 = self.h_representation(observation)
-        # s_0 = scale(s_0)
 
         # prediction
         p, v = self.f_prediction(s_0)
 
-        # v = tf_support_to_scalar(v, 20)
-
         return NetworkOutput(
-            value=float(v.numpy()),
-            reward=0.0,
+            value=tf.squeeze(v),
+            reward=tf.constant(0.0),
             policy_logits=build_policy_logits(policy_logits=p),
             hidden_state=s_0,
         )
@@ -163,7 +156,6 @@ class Network(object):
     def encode_state(self, hidden_state: tf.Tensor, action: int, action_space_size: int) -> tf.Tensor:
         one_hot = tf.expand_dims(tf.one_hot(action, action_space_size), 0)
         encoded_state = tf.concat([hidden_state, one_hot], axis=1)
-        # scale(encoded_state)
         return encoded_state
 
     def recurrent_inference(self, hidden_state, action: Action) -> NetworkOutput:
@@ -172,22 +164,18 @@ class Network(object):
         encoded_state = self.encode_state(hidden_state, action.index, self.config.action_space_size)
 
         s_k, r_k = self.g_dynamics(encoded_state)
-        # s_k = scale(s_k)
-
-        # r_k = tf_support_to_scalar(r_k, 20)
 
         # prediction
         p, v = self.f_prediction(s_k)
-        # v = tf_support_to_scalar(v, 20)
 
         return NetworkOutput(
-            value=float(v.numpy()),
-            reward=float(r_k.numpy()),
+            value=tf.squeeze(v),
+            reward=tf.squeeze(r_k),
             policy_logits=build_policy_logits(policy_logits=p),
             hidden_state=s_k
         )
 
-    def get_weigths(self) -> List:
+    def get_weights(self) -> List:
         networks = (self.f_prediction, self.g_dynamics, self.h_representation)
         return [variable for network in networks for variable in network.weights]
 
@@ -204,9 +192,6 @@ class Network(object):
 
     def training_steps_counter(self) -> int:
         return self._training_steps
-
-    def training_steps_set(self, value: int):
-        self._training_steps = value
 
     def increment_training_steps(self):
         self._training_steps += 1
