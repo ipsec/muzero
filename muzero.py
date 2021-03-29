@@ -58,7 +58,7 @@ def play_game(config: MuZeroConfig, network: Network) -> Game:
         current_observation = game.make_image(-1)
         network_output = network.initial_inference(current_observation)
         expand_node(root, game.to_play(), game.legal_actions(), network_output)
-        backpropagate([root], network_output.value, game.to_play(), config.discount, min_max_stats)
+        # backpropagate([root], network_output.value, game.to_play(), config.discount, min_max_stats)
         add_exploration_noise(config, root)
 
         # We then run a Monte Carlo Tree Search using only action sequences and the
@@ -168,12 +168,6 @@ def compute_loss(network: Network, batch, weight_decay: float):
             gradient_scale, network_output = prediction
             target_value, target_reward, target_policy = target
 
-            if target_reward != 1.0 and target_reward != 0.0:
-                print(f"value: {target_value}")
-                print(f"reward: {target_reward}")
-                print(f"policy: {target_policy}")
-                print("##########################")
-
             policy_loss = 0.
 
             if target_policy:
@@ -203,10 +197,10 @@ def update_weights(optimizer: tf.optimizers.Optimizer, network: Network, batch, 
     with tf.GradientTape() as tape:
         loss = compute_loss(network, batch, weight_decay)
 
-    train_loss(loss)
-
     grads = tape.gradient(loss, network.get_variables())
     optimizer.apply_gradients(zip(grads, network.get_variables()))
+
+    train_loss(loss)
 
     network.increment_training_steps()
     return loss

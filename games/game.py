@@ -105,9 +105,7 @@ class Game(object):
         observation, reward, done, info = self.env.step(action.index)
         self.done = done
 
-        if not done:
-            self.states.append(np.atleast_2d(observation))
-
+        self.states.append(np.atleast_2d(observation))
         self.rewards.append(reward)
         self.history.append(action)
 
@@ -194,9 +192,9 @@ def make_atari_config(env: Env) -> MuZeroConfig:
         max_moves=700,  # Half an hour at action repeat 4.
         discount=0.997,
         dirichlet_alpha=0.25,
-        num_simulations=50,  # Number of future moves self-simulated
+        num_simulations=25,  # Number of future moves self-simulated
         batch_size=128,
-        td_steps=10,  # Number of steps in the future to take into account for calculating the target value
+        td_steps=500,  # Number of steps in the future to take into account for calculating the target value
         num_actors=5,
         training_steps=100000,
         checkpoint_interval=10,
