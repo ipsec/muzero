@@ -1,7 +1,6 @@
-import operator
+import math
 from typing import List
 
-import math
 import numpy as np
 
 from config import MuZeroConfig
@@ -63,6 +62,7 @@ def select_child(config: MuZeroConfig, node: Node,
         (ucb_score(config, node, child, min_max_stats), action,
          child) for action, child in node.children.items())
 
+    """
     if node.visit_count == 0:
         act = []
         prev = []
@@ -75,6 +75,8 @@ def select_child(config: MuZeroConfig, node: Node,
         idx = np.argmax(prev)
         action = act[int(idx)]
         child = childs[int(idx)]
+
+    """
 
     return action, child
 

@@ -47,6 +47,7 @@ class Node(object):
         return self.value_sum / self.visit_count
 
 
+@tf.function
 def scalar_transform(x: float, eps: float = 0.001) -> tf.Tensor:
     return tf.math.sign(x) * (tf.math.sqrt(tf.math.abs(x) + 1) - 1) + eps * x
 
@@ -77,6 +78,18 @@ def tf_scalar_to_support(x: tf.Tensor,
     return tf.scatter_nd(indexes, updates, (1, 2 * support_size + 1))
 
 
+def tf_support_to_scalar(x: tf.Tensor, support_size: int,
+                         inv_reward_transformer: typing.Callable = inverse_scalar_transform,
+                         **kwargs) -> tf.Tensor:
+    if support_size == 0:  # Simple regression (support in this case can be the mean of a Gaussian)
+        return x
+
+    bins = tf.range(-support_size, support_size + 1, dtype=tf.float32)
+    value = tf.tensordot(tf.squeeze(x), tf.squeeze(bins), 1)
+
+    return inv_reward_transformer(value, **kwargs)
+
+
 def tf_scalar_to_support_batch(x: tf.Tensor, support_size: int) -> tf.Tensor:
     if support_size == 0:  # Simple regression (support in this case can be the mean of a Gaussian)
         return x
@@ -102,15 +115,3 @@ def tf_support_to_scalar_batch(x: tf.Tensor, support_size: int) -> tf.Tensor:
     value = tf.tensordot(tf.squeeze(x), tf.squeeze(bins), 1)
 
     return value
-
-
-def tf_support_to_scalar(x: tf.Tensor, support_size: int,
-                         inv_reward_transformer: typing.Callable = inverse_scalar_transform,
-                         **kwargs) -> tf.Tensor:
-    if support_size == 0:  # Simple regression (support in this case can be the mean of a Gaussian)
-        return x
-
-    bins = tf.range(-support_size, support_size + 1, dtype=tf.float32)
-    value = tf.tensordot(tf.squeeze(x), tf.squeeze(bins), 1)
-
-    return inv_reward_transformer(value, **kwargs)

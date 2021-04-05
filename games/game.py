@@ -1,4 +1,5 @@
 from collections import deque
+from random import choice, randrange
 from typing import List
 
 import gym
@@ -63,7 +64,6 @@ class Environment:
 
     def step(self, action):
         observation, reward, done, info = self.env.step(action)
-        observation = np.atleast_2d(observation)
         return observation, reward, done, info
 
     def close(self):
@@ -78,7 +78,7 @@ class Game(object):
 
     def __init__(self, discount: float):
         self.env = Environment()
-        self.states = []
+        self.states = [self.reset()]
         self.history = []
         self.rewards = []
         self.child_visits = []
@@ -95,7 +95,6 @@ class Game(object):
 
     def reset(self):
         observation = self.env.reset()
-        observation = np.atleast_2d(observation)
         return observation
 
     def legal_actions(self) -> List[Action]:
@@ -104,8 +103,7 @@ class Game(object):
     def apply(self, action: Action):
         observation, reward, done, info = self.env.step(action.index)
         self.done = done
-
-        self.states.append(np.atleast_2d(observation))
+        self.states.append(observation)
         self.rewards.append(reward)
         self.history.append(action)
 
@@ -119,9 +117,6 @@ class Game(object):
         self.root_values.append(root.value())
 
     def make_image(self, state_index: int):
-        if not self.states:
-            self.states.append(self.reset())
-
         return self.states[state_index]
 
     def make_target(self, state_index: int, num_unroll_steps: int, td_steps: int,
@@ -176,12 +171,12 @@ class ReplayBuffer(object):
                 for (g, i) in game_pos]
 
     def sample_game(self) -> Game:
-        return np.random.choice(self.buffer)
-        # return choice(self.buffer)
+        # return np.random.choice(self.buffer)
+        return choice(self.buffer)
 
     def sample_position(self, game) -> int:
-        return np.random.choice(len(game.history))
-        # return randrange(len(game.history))
+        # return np.random.choice(len(game.history))
+        return randrange(len(game.history))
 
 
 def make_atari_config(env: Env) -> MuZeroConfig:
@@ -192,12 +187,12 @@ def make_atari_config(env: Env) -> MuZeroConfig:
         max_moves=700,  # Half an hour at action repeat 4.
         discount=0.997,
         dirichlet_alpha=0.25,
-        num_simulations=25,  # Number of future moves self-simulated
-        batch_size=128,
-        td_steps=500,  # Number of steps in the future to take into account for calculating the target value
-        num_actors=5,
-        training_steps=100000,
+        num_simulations=30,  # Number of future moves self-simulated
+        batch_size=32,
+        td_steps=10,  # Number of steps in the future to take into account for calculating the target value
+        num_actors=4,
+        training_steps=10000000,
         checkpoint_interval=10,
-        lr_init=0.001,
+        lr_init=0.02,
         lr_decay_steps=1000,
         lr_decay_rate=0.9)
