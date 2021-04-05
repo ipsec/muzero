@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
+import atexit
 import logging
 from pathlib import Path
+from threading import Thread
 
+import ray
 import gym
 import tensorflow as tf
 from tensorflow.keras.optimizers import Adam
@@ -32,23 +35,26 @@ def write_summary_score(step):
 def write_summary_loss(step):
     with summary_writer.as_default():
         tf.summary.scalar("Loss", train_loss.result(), step)
+        train_loss.reset_states()
 
 
-def run_selfplay(config: MuZeroConfig, storage: SharedStorage, replay_buffer: ReplayBuffer):
-    # while True:
-    network = storage.latest_network()
-    game = play_game(config, network)
-    train_score_mean(sum(game.rewards))
-    games_count(1)
-    write_summary_score(int(games_count.result()))
-    replay_buffer.save_game(game)
+def run_selfplay(config: MuZeroConfig, replay_buffer: ReplayBuffer):
+    while True:
+        game = ray.get(play_game.remote(config))
+        train_score_mean(sum(game.rewards))
+        games_count(1)
+        write_summary_score(int(games_count.result()))
+        replay_buffer.save_game(game)
 
 
 # Each game is produced by starting at the initial board position, then
 # repeatedly executing a Monte Carlo Tree Search to generate moves until the end
 # of the game is reached.
-def play_game(config: MuZeroConfig, network: Network) -> Game:
+@ray.remote
+def play_game(config: MuZeroConfig) -> Game:
     game = Game(config.discount)
+    network = Network(config)
+    network.restore()
 
     while not game.terminal() and len(game.history) < config.max_moves:
         min_max_stats = MinMaxStats(config.known_bounds)
@@ -88,12 +94,11 @@ def train_network(config: MuZeroConfig,
 
     for i in range(config.training_steps):
 
-        run_selfplay(config, storage, replay_buffer)
-
         if i % config.checkpoint_interval == 0:
             storage.save_network(i, network)
             print(f"Step {i} - Saving models")
-            network.save()
+            network.save(i)
+            network.save_latest()
 
         batch = replay_buffer.sample_batch(config.num_unroll_steps, config.td_steps)
         update_weights(optimizer, network, batch, config.weight_decay)
@@ -139,11 +144,11 @@ def compute_loss(image, actions, targets, network, weight_decay):
         gradient_scale, network_output = prediction
         target_value, target_reward, target_policy = target
 
-        policy_values = list(network_output.policy_logits.values())
+        policy_logits = list(network_output.policy_logits.values())
 
         l = 0
         if target_policy:
-            l = tf.nn.softmax_cross_entropy_with_logits(logits=policy_values, labels=target_policy)
+            l = tf.nn.softmax_cross_entropy_with_logits(logits=policy_logits, labels=target_policy)
 
         l += scalar_loss(network_output.value, target_value, with_support=False)
 
@@ -174,11 +179,27 @@ def muzero(config: MuZeroConfig):
     storage = SharedStorage(config)
     replay_buffer = ReplayBuffer(config)
 
+    network = Network(config)
+    network.save_latest()
+
+    for actor_num in range(config.num_actors):
+        thread = Thread(target=run_selfplay, args=(config, replay_buffer), name=f'Actor-{actor_num}')
+        thread.start()
+
+    while len(replay_buffer.buffer) < 10:
+        pass
+
     train_network(config, storage, replay_buffer)
     export_models(storage.latest_network())
 
 
+@atexit.register
+def ray_shutdown():
+    ray.shutdown()
+
+
 if __name__ == "__main__":
+    ray.init()
     scores = {}
     train_loss = tf.keras.metrics.Mean('train_loss', dtype=tf.float32)
     train_score_mean = tf.keras.metrics.Mean('train_score_mean', dtype=tf.float32)

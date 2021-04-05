@@ -5,6 +5,7 @@ import tensorflow as tf
 import numpy as np
 from tensorflow.keras.layers import Dense, InputLayer
 from tensorflow.keras.models import Model
+from tensorflow.keras.models import load_model
 
 from config import MuZeroConfig
 from games.game import Action
@@ -112,27 +113,58 @@ class Network(object):
         self.config = config
         self._training_steps = 0
 
-        self.g_dynamics = Dynamics(config.state_space_size, config.action_space_size + config.state_space_size)
         self.f_prediction = Prediction(config.action_space_size, config.state_space_size)
+        self.g_dynamics = Dynamics(config.state_space_size, config.action_space_size + config.state_space_size)
         self.h_representation = Representation(config.state_space_size)
 
-        self.f_prediction_path = Path('./checkpoints/muzero/Prediction')
-        self.g_dynamics_path = Path('./checkpoints/muzero/Dynamics')
-        self.h_representation_path = Path('./checkpoints/muzero/Representation')
+        self.f_prediction_path = Path('./checkpoints/muzero')
+        self.g_dynamics_path = Path('./checkpoints/muzero')
+        self.h_representation_path = Path('./checkpoints/muzero')
 
-    def save(self):
-        Path.mkdir(self.f_prediction_path, parents=True, exist_ok=True)
-        Path.mkdir(self.g_dynamics_path, parents=True, exist_ok=True)
-        Path.mkdir(self.h_representation_path, parents=True, exist_ok=True)
-        self.f_prediction.save(self.f_prediction_path, include_optimizer=False)
-        self.g_dynamics.save(self.g_dynamics_path, include_optimizer=False)
-        self.h_representation.save(self.h_representation_path, include_optimizer=False)
+        self.build()
+
+    def build(self):
+        """
+        Run model first time to build it
+        :return:
+        """
+        obs = np.random.rand(self.config.state_space_size, )
+        network_output = self.initial_inference(obs)
+        self.recurrent_inference(network_output.hidden_state, Action(0))
+
+    def save(self, step: int):
+        # Saving step folder
+        prediction_step_path = self.f_prediction_path.joinpath(str(step)).joinpath("Prediction")
+        dynamics_step_path = self.g_dynamics_path.joinpath(str(step)).joinpath("Dynamics")
+        representation_step_path = self.h_representation_path.joinpath(str(step)).joinpath("Representation")
+        Path.mkdir(prediction_step_path, parents=True, exist_ok=True)
+        Path.mkdir(dynamics_step_path, parents=True, exist_ok=True)
+        Path.mkdir(representation_step_path, parents=True, exist_ok=True)
+        self.f_prediction.save(prediction_step_path, include_optimizer=False)
+        self.g_dynamics.save(dynamics_step_path, include_optimizer=False)
+        self.h_representation.save(representation_step_path, include_optimizer=False)
+
+    def save_latest(self):
+        # Saving latest folder
+        prediction_latest_path = self.f_prediction_path.joinpath('latest').joinpath("Prediction")
+        dynamics_latest_path = self.g_dynamics_path.joinpath('latest').joinpath("Dynamics")
+        representation_latest_path = self.h_representation_path.joinpath('latest').joinpath("Representation")
+        Path.mkdir(prediction_latest_path, parents=True, exist_ok=True)
+        Path.mkdir(dynamics_latest_path, parents=True, exist_ok=True)
+        Path.mkdir(representation_latest_path, parents=True, exist_ok=True)
+        self.f_prediction.save(prediction_latest_path, include_optimizer=False)
+        self.g_dynamics.save(dynamics_latest_path, include_optimizer=False)
+        self.h_representation.save(representation_latest_path, include_optimizer=False)
 
     def restore(self):
-        if self.f_prediction_path.exists() and self.g_dynamics_path.exists() and self.h_representation_path.exists():
-            self.f_prediction = tf.keras.models.load_model(self.f_prediction_path, compile=False)
-            self.g_dynamics = tf.keras.models.load_model(self.g_dynamics_path, compile=False)
-            self.h_representation = tf.keras.models.load_model(self.h_representation_path, compile=False)
+        prediction_latest_path = self.f_prediction_path.joinpath('latest').joinpath("Prediction")
+        dynamics_latest_path = self.g_dynamics_path.joinpath('latest').joinpath("Dynamics")
+        representation_latest_path = self.h_representation_path.joinpath('latest').joinpath("Representation")
+
+        if prediction_latest_path.exists() and dynamics_latest_path.exists() and representation_latest_path.exists():
+            self.f_prediction = load_model(prediction_latest_path, compile=False)
+            self.g_dynamics = load_model(dynamics_latest_path, compile=False)
+            self.h_representation = load_model(representation_latest_path, compile=False)
 
     def initial_inference(self, observation: np.array) -> NetworkOutput:
         # representation + prediction function
