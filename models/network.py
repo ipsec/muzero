@@ -34,7 +34,7 @@ class Prediction(Model):
         neurons = 20
         self.inputs = InputLayer(input_shape=(hidden_state_size,), name="f_inputs")
         self.hidden = Dense(neurons, name="f_hidden", activation=tf.nn.relu)
-        self.common = Dense(neurons, name="f_common", activation=tf.nn.relu)
+        # self.common = Dense(neurons, name="f_common", activation=tf.nn.relu)
         self.policy = Dense(action_state_size, name="f_policy")
         self.value = Dense(1, name="f_value")
 
@@ -45,7 +45,7 @@ class Prediction(Model):
         """
         x = self.inputs(hidden_state)
         x = self.hidden(x)
-        x = self.common(x)
+        # x = self.common(x)
 
         policy = self.policy(x)
         value = self.value(x)
@@ -63,7 +63,7 @@ class Dynamics(Model):
         neurons = 20
         self.inputs = InputLayer(input_shape=(enc_space_size,), name="g_inputs")
         self.hidden = Dense(neurons, name="g_hidden", activation=tf.nn.relu)
-        self.common = Dense(neurons, name="g_common", activation=tf.nn.relu)
+        # self.common = Dense(neurons, name="g_common", activation=tf.nn.relu)
         self.s_k = Dense(hidden_state_size, name="g_s_k")
         self.r_k = Dense(1, name="g_r_k")
 
@@ -76,7 +76,7 @@ class Dynamics(Model):
         """
         x = self.inputs(encoded_space)
         x = self.hidden(x)
-        x = self.common(x)
+        # x = self.common(x)
         s_k = self.s_k(x)
         r_k = self.r_k(x)
 
@@ -93,7 +93,7 @@ class Representation(Model):
         neurons = 20
         self.inputs = InputLayer(input_shape=(obs_space_size,), name="h_inputs")
         self.hidden = Dense(neurons,  name="h_hidden", activation=tf.nn.relu)
-        self.common = Dense(neurons, name="h_common", activation=tf.nn.relu)
+        # self.common = Dense(neurons, name="h_common", activation=tf.nn.relu)
         self.s_0 = Dense(obs_space_size, name="h_s_0")
 
     def call(self, observation, **kwargs) -> tf.Tensor:
@@ -103,7 +103,7 @@ class Representation(Model):
         """
         x = self.inputs(observation)
         x = self.hidden(x)
-        x = self.common(x)
+        # x = self.common(x)
         s_0 = self.s_0(x)
         return s_0
 
@@ -211,11 +211,7 @@ class Network(object):
         return [variable for network in networks for variable in network.trainable_variables]
 
     def get_networks(self) -> List:
-        return [
-            self.f_prediction,
-            self.g_dynamics,
-            self.h_representation
-        ]
+        return [self.f_prediction, self.g_dynamics, self.h_representation]
 
     def training_steps(self) -> int:
         # How many steps / batches the network has been trained for.

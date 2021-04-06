@@ -114,8 +114,8 @@ def scale_gradient(tensor, scale):
 
 
 def scalar_loss(prediction, target, with_support: bool = False):
-    target = tf.cast([[target]], dtype=tf.float32)
-    prediction = tf.cast([[prediction]], dtype=tf.float32)
+    target = tf.expand_dims(target, axis=0)
+    prediction = tf.expand_dims(prediction, axis=0)
 
     if with_support:
         target = tf_scalar_to_support(target, 20)
@@ -144,21 +144,24 @@ def compute_loss(image, actions, targets, network, weight_decay):
         gradient_scale, network_output = prediction
         target_value, target_reward, target_policy = target
 
-        policy_logits = list(network_output.policy_logits.values())
+        policy_logits = tf.stack(list(network_output.policy_logits.values()))
 
         l = 0
         if target_policy:
+            target_policy = tf.convert_to_tensor(target_policy)
             l = tf.nn.softmax_cross_entropy_with_logits(logits=policy_logits, labels=target_policy)
 
+        target_value = tf.convert_to_tensor(target_value)
         l += scalar_loss(network_output.value, target_value, with_support=False)
 
         if k > 0:
+            target_reward = tf.convert_to_tensor(target_reward)
             l += scalar_loss(network_output.reward, target_reward, with_support=False)
 
         loss += scale_gradient(l, gradient_scale)
 
-    # for weights in network.get_weights():
-    #    loss += weight_decay * tf.nn.l2_loss(weights)
+    for weights in network.get_weights():
+        loss += weight_decay * tf.nn.l2_loss(weights)
 
     train_loss(loss)
 
