@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 from threading import Thread
 
+import os
 import ray
 import gym
 import tensorflow as tf
@@ -19,6 +20,7 @@ from utils import MinMaxStats, tf_scalar_to_support
 from utils.exports import export_models
 
 logging.getLogger("tensorflow").setLevel(logging.WARNING)
+os.environ["OMP_NUM_THREADS"] = "1"
 
 
 def write_game_count(step):
@@ -118,6 +120,12 @@ def scalar_loss(prediction, target, with_support: bool = False):
     prediction = tf.expand_dims(prediction, axis=0)
 
     if with_support:
+        target = tf.expand_dims(target, axis=0)
+        prediction = tf.expand_dims(prediction, axis=0)
+
+        target = tf.cast(target, dtype=tf.float32)
+        prediction = tf.cast(prediction, dtype=tf.float32)
+
         target = tf_scalar_to_support(target, 20)
         prediction = tf_scalar_to_support(prediction, 20)
         return tf.nn.softmax_cross_entropy_with_logits(logits=prediction, labels=target)

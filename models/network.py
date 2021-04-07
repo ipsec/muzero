@@ -1,11 +1,12 @@
 from pathlib import Path
-from typing import List, Tuple, Callable
+from typing import List, Tuple
 
-import tensorflow as tf
 import numpy as np
+import tensorflow as tf
 from tensorflow.keras.layers import Dense, InputLayer
 from tensorflow.keras.models import Model
 from tensorflow.keras.models import load_model
+from tensorflow.keras.regularizers import l2
 
 from config import MuZeroConfig
 from games.game import Action
@@ -33,8 +34,8 @@ class Prediction(Model):
         super(Prediction, self).__init__()
         neurons = 20
         self.inputs = InputLayer(input_shape=(hidden_state_size,), name="f_inputs")
-        self.hidden = Dense(neurons, name="f_hidden", activation=tf.nn.relu)
-        # self.common = Dense(neurons, name="f_common", activation=tf.nn.relu)
+        self.hidden_policy = Dense(neurons, name="f_hidden_policy", activation=tf.nn.relu)
+        self.hidden_value = Dense(neurons, name="f_hidden_value", activation=tf.nn.relu)
         self.policy = Dense(action_state_size, name="f_policy")
         self.value = Dense(1, name="f_value")
 
@@ -44,11 +45,11 @@ class Prediction(Model):
         :return: NetworkOutput with policy logits and value
         """
         x = self.inputs(hidden_state)
-        x = self.hidden(x)
-        # x = self.common(x)
+        hidden_policy = self.hidden_policy(x)
+        hidden_value = self.hidden_value(x)
 
-        policy = self.policy(x)
-        value = self.value(x)
+        policy = self.policy(hidden_policy)
+        value = self.value(hidden_value)
 
         return policy, value
 
@@ -62,8 +63,8 @@ class Dynamics(Model):
         super(Dynamics, self).__init__()
         neurons = 20
         self.inputs = InputLayer(input_shape=(enc_space_size,), name="g_inputs")
-        self.hidden = Dense(neurons, name="g_hidden", activation=tf.nn.relu)
-        # self.common = Dense(neurons, name="g_common", activation=tf.nn.relu)
+        self.hidden_state = Dense(neurons, name="g_hidden_state", activation=tf.nn.relu)
+        self.hidden_reward = Dense(neurons, name="g_hidden_reward", activation=tf.nn.relu)
         self.s_k = Dense(hidden_state_size, name="g_s_k")
         self.r_k = Dense(1, name="g_r_k")
 
@@ -75,10 +76,10 @@ class Dynamics(Model):
         :return: NetworkOutput with reward (r^k) and hidden state (s^k)
         """
         x = self.inputs(encoded_space)
-        x = self.hidden(x)
-        # x = self.common(x)
-        s_k = self.s_k(x)
-        r_k = self.r_k(x)
+        hidden_state = self.hidden_state(x)
+        hidden_reward = self.hidden_reward(x)
+        s_k = self.s_k(hidden_state)
+        r_k = self.r_k(hidden_reward)
 
         return s_k, r_k
 
@@ -92,8 +93,7 @@ class Representation(Model):
         super(Representation, self).__init__()
         neurons = 20
         self.inputs = InputLayer(input_shape=(obs_space_size,), name="h_inputs")
-        self.hidden = Dense(neurons,  name="h_hidden", activation=tf.nn.relu)
-        # self.common = Dense(neurons, name="h_common", activation=tf.nn.relu)
+        self.hidden = Dense(neurons, name="h_hidden", activation=tf.nn.relu)
         self.s_0 = Dense(obs_space_size, name="h_s_0")
 
     def call(self, observation, **kwargs) -> tf.Tensor:
@@ -103,7 +103,6 @@ class Representation(Model):
         """
         x = self.inputs(observation)
         x = self.hidden(x)
-        # x = self.common(x)
         s_0 = self.s_0(x)
         return s_0
 
@@ -171,7 +170,7 @@ class Network(object):
 
         # representation
         observation = np.expand_dims(observation, axis=0)
-        observation = scale_observation(observation)
+        # observation = scale_observation(observation)
         s_0 = self.h_representation(observation)
 
         # prediction
