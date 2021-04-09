@@ -23,10 +23,10 @@ class Action(object):
         return self.index
 
     def __eq__(self, other):
-        return self.index == other.index
+        return self == other
 
     def __gt__(self, other):
-        return self.index > other.index
+        return self > other
 
 
 class ActionHistory(object):
@@ -35,21 +35,21 @@ class ActionHistory(object):
   Only used to keep track of the actions executed.
   """
 
-    def __init__(self, history: List[Action], action_space_size: int):
+    def __init__(self, history: List[int], action_space_size: int):
         self.history = list(history)
         self.action_space_size = action_space_size
 
     def clone(self):
         return ActionHistory(self.history, self.action_space_size)
 
-    def add_action(self, action: Action):
+    def add_action(self, action: int):
         self.history.append(action)
 
-    def last_action(self) -> Action:
+    def last_action(self) -> int:
         return self.history[-1]
 
-    def action_space(self) -> List[Action]:
-        return [Action(i) for i in range(self.action_space_size)]
+    def action_space(self) -> List[int]:
+        return list(range(self.action_space_size))
 
     def to_play(self) -> Player:
         return Player()
@@ -64,6 +64,7 @@ class Environment:
 
     def step(self, action):
         observation, reward, done, info = self.env.step(action)
+        observation = np.expand_dims(observation, axis=0)
         return observation, reward, done, info
 
     def close(self):
@@ -78,7 +79,7 @@ class Game(object):
 
     def __init__(self, discount: float):
         self.env = Environment()
-        self.states = [self.reset()]
+        self.observations = []
         self.history = []
         self.rewards = []
         self.child_visits = []
@@ -88,36 +89,44 @@ class Game(object):
         self.done = False
 
     def terminal(self) -> bool:
-        if self.done:
-            self.env.close()
-
         return self.done
 
-    def reset(self):
-        observation = self.env.reset()
-        return observation
-
-    def legal_actions(self) -> List[Action]:
-        return list(map(lambda i: Action(i), range(self.action_space_size)))
+    def legal_actions(self) -> List[int]:
+        return list(range(self.action_space_size))
+        # return list(map(lambda i: Action(i), range(self.action_space_size)))
 
     def apply(self, action: Action):
-        observation, reward, done, info = self.env.step(action.index)
+        observation, reward, done, info = self.env.step(action)
         self.done = done
-        self.states.append(observation)
+
+        if done:
+            observation = self.reset()
+
+        self.observations.append(observation)
         self.rewards.append(reward)
         self.history.append(action)
 
     def store_search_statistics(self, root: Node):
         sum_visits = sum(child.visit_count for child in root.children.values())
-        action_space = (Action(index) for index in range(self.action_space_size))
         self.child_visits.append([
             root.children[a].visit_count / sum_visits if a in root.children else 0
-            for a in action_space
+            for a in self.legal_actions()
         ])
         self.root_values.append(root.value())
 
-    def make_image(self, state_index: int):
-        return self.states[state_index]
+    def reset(self):
+        observation = self.env.reset()
+        observation = np.expand_dims(observation, axis=0)
+        return observation
+
+    def get_observation_from_index(self, state_index: int):
+        if not self.observations:
+            observation = self.reset()
+            self.observations.append(observation)
+            self.rewards.append(0.0)
+            self.history.append(0)
+
+        return self.observations[state_index]
 
     def make_target(self, state_index: int, num_unroll_steps: int, td_steps: int,
                     to_play: Player):
@@ -134,10 +143,10 @@ class Game(object):
             for i, reward in enumerate(self.rewards[current_index:bootstrap_index]):
                 value += reward * self.discount ** i  # pytype: disable=unsupported-operands
 
-            if 0 < current_index <= len(self.rewards):
+            if current_index > 0 and current_index <= len(self.rewards):
                 last_reward = self.rewards[current_index - 1]
             else:
-                last_reward = 0.
+                last_reward = None
 
             if current_index < len(self.root_values):
                 targets.append((value, last_reward, self.child_visits[current_index]))
@@ -166,7 +175,7 @@ class ReplayBuffer(object):
     def sample_batch(self, num_unroll_steps: int, td_steps: int):
         games = [self.sample_game() for _ in range(self.batch_size)]
         game_pos = [(g, self.sample_position(g)) for g in games]
-        return [(g.make_image(i), g.history[i:i + num_unroll_steps],
+        return [(g.get_observation_from_index(i), g.history[i:i + num_unroll_steps],
                  g.make_target(i, num_unroll_steps, td_steps, g.to_play()))
                 for (g, i) in game_pos]
 
@@ -189,10 +198,10 @@ def make_atari_config(env: Env) -> MuZeroConfig:
         dirichlet_alpha=0.25,
         num_simulations=50,  # Number of future moves self-simulated
         batch_size=32,
-        td_steps=500,  # Number of steps in the future to take into account for calculating the target value
-        num_actors=2,
-        training_steps=10000000,
-        checkpoint_interval=100,
-        lr_init=0.001,
+        td_steps=10,  # Number of steps in the future to take into account for calculating the target value
+        num_actors=3,
+        training_steps=100000,
+        checkpoint_interval=25,
+        lr_init=0.02,
         lr_decay_steps=100000,
         lr_decay_rate=0.01)

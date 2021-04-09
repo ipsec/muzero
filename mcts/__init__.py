@@ -37,20 +37,29 @@ def run_mcts(config: MuZeroConfig, root: Node, action_history: ActionHistory,
                       config.discount, min_max_stats)
 
 
-def visit_softmax_temperature(training_steps):
-    if training_steps < 500:
-        return 1.0
-    elif training_steps < 1000:
-        return 0.5
-    else:
-        return 0.1
+def decay(steps: int = 100, stop: int = 1000000):
+    xs = np.linspace(0, stop, num=steps)
+    data = np.linspace(0, stop, num=steps)
+    ys = np.flip(data - np.min(data)) / (np.max(data) - np.min(data))
+    return dict(zip(xs.astype(int), ys.round(2)))
 
 
-def select_action(node: Node, network: Network):
+def get_temperature_step(training_steps, config: MuZeroConfig):
+    d = decay(stop=config.training_steps)
+    x = dict((k, v) for k, v in d.items() if k <= training_steps)
+    return x[max(x, key=int)]
+
+
+def visit_softmax_temperature(training_steps, config):
+    temperature = get_temperature_step(training_steps, config)
+    return temperature
+
+
+def select_action(node: Node, network: Network, config: MuZeroConfig):
     visit_counts = [
         (child.visit_count, action) for action, child in node.children.items()
     ]
-    t = visit_softmax_temperature(training_steps=network.training_steps_counter())
+    t = visit_softmax_temperature(training_steps=network.training_steps_counter(), config=config)
     action = softmax_sample(visit_counts, t)
     return action
 
@@ -61,22 +70,6 @@ def select_child(config: MuZeroConfig, node: Node,
     _, action, child = max(
         (ucb_score(config, node, child, min_max_stats), action,
          child) for action, child in node.children.items())
-
-    """
-    if node.visit_count == 0:
-        act = []
-        prev = []
-        childs = []
-        for action, child in node.children.items():
-            act.append(action)
-            prev.append(child.prior)
-            childs.append(child)
-
-        idx = np.argmax(prev)
-        action = act[int(idx)]
-        child = childs[int(idx)]
-
-    """
 
     return action, child
 
@@ -100,7 +93,7 @@ def ucb_score(config: MuZeroConfig, parent: Node, child: Node,
 
 # We expand a node using the value, reward and policy prediction obtained from
 # the neural network.
-def expand_node(node: Node, to_play: Player, actions: List[Action],
+def expand_node(node: Node, to_play: Player, actions: List[int],
                 network_output: NetworkOutput):
     node.to_play = to_play
     node.hidden_state = network_output.hidden_state

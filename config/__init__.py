@@ -59,6 +59,7 @@ class MuZeroConfig(object):
         self.num_unroll_steps = 5
         self.td_steps = td_steps
         self.checkpoint_interval = checkpoint_interval
+        self.support_size = 20
 
         self.weight_decay = 1e-4
         self.momentum = 0.9

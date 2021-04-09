@@ -3,18 +3,24 @@ from typing import List, Tuple
 
 import numpy as np
 import tensorflow as tf
-from tensorflow.keras.layers import Dense, InputLayer
+from tensorflow.keras.layers import Dense
 from tensorflow.keras.models import Model
 from tensorflow.keras.models import load_model
-from tensorflow.keras.regularizers import l2
 
 from config import MuZeroConfig
-from games.game import Action
 from models import NetworkOutput
+from utils import tf_support_to_scalar
 
 
 def scale_observation(t: np.array):
     return (t - np.min(t)) / (np.max(t) - np.min(t))
+
+
+def scale_state(state: np.array):
+    _min = state.min(keepdims=True)
+    _max = state.max(keepdims=True)
+    state = (state - _min) / (_max - _min)
+    return state
 
 
 def scale_hidden_state(t: tf.Tensor):
@@ -22,22 +28,23 @@ def scale_hidden_state(t: tf.Tensor):
 
 
 def build_policy_logits(policy_logits: tf.Tensor):
-    return {Action(i): tf.squeeze(logit) for i, logit in enumerate(policy_logits[0])}
+    return {i: tf.squeeze(logit) for i, logit in enumerate(policy_logits[0])}
+    # return {Action(i): tf.squeeze(logit) for i, logit in enumerate(policy_logits[0])}
 
 
 class Prediction(Model):
-    def __init__(self, action_state_size: int, hidden_state_size: int):
+    def __init__(self, action_state_size: int, hidden_state_size: int, support_size: int):
         """
         p^k, v^k = f_0(s^k)
         :param action_state_size: size of action state
         """
         super(Prediction, self).__init__()
-        neurons = 20
-        self.inputs = InputLayer(input_shape=(hidden_state_size,), name="f_inputs")
+        neurons = 512
+        self.inputs = Dense(hidden_state_size, name="f_inputs")
         self.hidden_policy = Dense(neurons, name="f_hidden_policy", activation=tf.nn.relu)
         self.hidden_value = Dense(neurons, name="f_hidden_value", activation=tf.nn.relu)
         self.policy = Dense(action_state_size, name="f_policy")
-        self.value = Dense(1, name="f_value")
+        self.value = Dense(2 * support_size + 1, name="f_value")
 
     def call(self, hidden_state, **kwargs) -> Tuple[tf.Tensor, tf.Tensor]:
         """
@@ -55,18 +62,18 @@ class Prediction(Model):
 
 
 class Dynamics(Model):
-    def __init__(self, hidden_state_size: int, enc_space_size: int):
+    def __init__(self, hidden_state_size: int, enc_space_size: int, support_size: int):
         """
         r^k, s^k = g_0(s^(k-1), a^k)
         :param enc_space_size: size of hidden state
         """
         super(Dynamics, self).__init__()
-        neurons = 20
-        self.inputs = InputLayer(input_shape=(enc_space_size,), name="g_inputs")
+        neurons = 512
+        self.inputs = Dense(enc_space_size, name="g_inputs")
         self.hidden_state = Dense(neurons, name="g_hidden_state", activation=tf.nn.relu)
         self.hidden_reward = Dense(neurons, name="g_hidden_reward", activation=tf.nn.relu)
-        self.s_k = Dense(hidden_state_size, name="g_s_k")
-        self.r_k = Dense(1, name="g_r_k")
+        self.s_k = Dense(hidden_state_size, name="g_s_k", activation=tf.nn.relu)
+        self.r_k = Dense(2 * support_size + 1, name="g_r_k")
 
     def call(self, encoded_space, **kwargs) -> Tuple[tf.Tensor, tf.Tensor]:
         """
@@ -85,16 +92,16 @@ class Dynamics(Model):
 
 
 class Representation(Model):
-    def __init__(self, obs_space_size: int):
+    def __init__(self, obs_space_size: int, hidden_state_size: int):
         """
         s^0 = h_0(o_1,...,o_t)
         :param obs_space_size
         """
         super(Representation, self).__init__()
-        neurons = 20
-        self.inputs = InputLayer(input_shape=(obs_space_size,), name="h_inputs")
+        neurons = 512
+        self.inputs = Dense(obs_space_size, name="h_inputs")
         self.hidden = Dense(neurons, name="h_hidden", activation=tf.nn.relu)
-        self.s_0 = Dense(obs_space_size, name="h_s_0")
+        self.s_0 = Dense(hidden_state_size, name="h_s_0", activation=tf.nn.relu)
 
     def call(self, observation, **kwargs) -> tf.Tensor:
         """
@@ -112,24 +119,17 @@ class Network(object):
         self.config = config
         self._training_steps = 0
 
-        self.f_prediction = Prediction(config.action_space_size, config.state_space_size)
-        self.g_dynamics = Dynamics(config.state_space_size, config.action_space_size + config.state_space_size)
-        self.h_representation = Representation(config.state_space_size)
+        self.hidden_state_size = 50
+
+        encoded_size = config.action_space_size + self.hidden_state_size
+
+        self.f_prediction = Prediction(config.action_space_size, self.hidden_state_size, self.config.support_size)
+        self.g_dynamics = Dynamics(self.hidden_state_size, encoded_size, self.config.support_size)
+        self.h_representation = Representation(config.state_space_size, self.hidden_state_size)
 
         self.f_prediction_path = Path('./checkpoints/muzero')
         self.g_dynamics_path = Path('./checkpoints/muzero')
         self.h_representation_path = Path('./checkpoints/muzero')
-
-        self.build()
-
-    def build(self):
-        """
-        Run model first time to build it
-        :return:
-        """
-        obs = np.random.rand(self.config.state_space_size, )
-        network_output = self.initial_inference(obs)
-        self.recurrent_inference(network_output.hidden_state, Action(0))
 
     def save(self, step: int):
         # Saving step folder
@@ -139,9 +139,12 @@ class Network(object):
         Path.mkdir(prediction_step_path, parents=True, exist_ok=True)
         Path.mkdir(dynamics_step_path, parents=True, exist_ok=True)
         Path.mkdir(representation_step_path, parents=True, exist_ok=True)
-        self.f_prediction.save(prediction_step_path, include_optimizer=False)
-        self.g_dynamics.save(dynamics_step_path, include_optimizer=False)
-        self.h_representation.save(representation_step_path, include_optimizer=False)
+        try:
+            self.f_prediction.save(prediction_step_path, include_optimizer=False)
+            self.g_dynamics.save(dynamics_step_path, include_optimizer=False)
+            self.h_representation.save(representation_step_path, include_optimizer=False)
+        except Exception:
+            pass
 
     def save_latest(self):
         # Saving latest folder
@@ -151,9 +154,12 @@ class Network(object):
         Path.mkdir(prediction_latest_path, parents=True, exist_ok=True)
         Path.mkdir(dynamics_latest_path, parents=True, exist_ok=True)
         Path.mkdir(representation_latest_path, parents=True, exist_ok=True)
-        self.f_prediction.save(prediction_latest_path, include_optimizer=False)
-        self.g_dynamics.save(dynamics_latest_path, include_optimizer=False)
-        self.h_representation.save(representation_latest_path, include_optimizer=False)
+        try:
+            self.f_prediction.save(prediction_latest_path, include_optimizer=False)
+            self.g_dynamics.save(dynamics_latest_path, include_optimizer=False)
+            self.h_representation.save(representation_latest_path, include_optimizer=False)
+        except Exception:
+            pass
 
     def restore(self):
         prediction_latest_path = self.f_prediction_path.joinpath('latest').joinpath("Prediction")
@@ -161,20 +167,26 @@ class Network(object):
         representation_latest_path = self.h_representation_path.joinpath('latest').joinpath("Representation")
 
         if prediction_latest_path.exists() and dynamics_latest_path.exists() and representation_latest_path.exists():
-            self.f_prediction = load_model(prediction_latest_path, compile=False)
-            self.g_dynamics = load_model(dynamics_latest_path, compile=False)
-            self.h_representation = load_model(representation_latest_path, compile=False)
+            try:
+                self.f_prediction = load_model(prediction_latest_path, compile=False)
+                self.g_dynamics = load_model(dynamics_latest_path, compile=False)
+                self.h_representation = load_model(representation_latest_path, compile=False)
+            except Exception:
+                pass
 
-    def initial_inference(self, observation: np.array) -> NetworkOutput:
+    def initial_inference(self, observation: np.array, training: bool = False) -> NetworkOutput:
         # representation + prediction function
 
         # representation
-        observation = np.expand_dims(observation, axis=0)
+        # observation = tf.expand_dims(observation, axis=0)
         # observation = scale_observation(observation)
-        s_0 = self.h_representation(observation)
+        s_0 = self.h_representation(observation, training=training)
+
+        s_0 = scale_hidden_state(s_0)
 
         # prediction
-        policy, value = self.f_prediction(s_0)
+        policy, value = self.f_prediction(s_0, training=training)
+        value = tf_support_to_scalar(value, self.config.support_size)
 
         return NetworkOutput(
             value=tf.squeeze(value),
@@ -183,16 +195,19 @@ class Network(object):
             hidden_state=s_0
         )
 
-    def recurrent_inference(self, hidden_state, action: Action) -> NetworkOutput:
+    def recurrent_inference(self, hidden_state: tf.Tensor, action: int, training: bool = False) -> NetworkOutput:
         # dynamics + prediction function
         # dynamics (encoded_state)
-        hidden_state = scale_hidden_state(hidden_state)
-        one_hot = tf.expand_dims(tf.one_hot(action.index, self.config.action_space_size), 0)
+        one_hot = tf.one_hot([action], self.config.action_space_size)
         encoded_state = tf.concat([hidden_state, one_hot], axis=1)
 
-        s_k, r_k = self.g_dynamics(encoded_state)
+        s_k, r_k = self.g_dynamics(encoded_state, training=training)
 
-        policy, value = self.f_prediction(s_k)
+        s_k = scale_hidden_state(s_k)
+
+        policy, value = self.f_prediction(s_k, training=training)
+        value = tf_support_to_scalar(value, self.config.support_size)
+        r_k = tf_support_to_scalar(r_k, self.config.support_size)
 
         return NetworkOutput(
             value=tf.squeeze(value),
