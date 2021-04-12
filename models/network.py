@@ -1,3 +1,4 @@
+from abc import ABC
 from pathlib import Path
 from typing import List, Tuple
 
@@ -8,19 +9,9 @@ from tensorflow.keras.models import Model
 from tensorflow.keras.models import load_model
 
 from config import MuZeroConfig
+from games.game import Action
 from models import NetworkOutput
 from utils import tf_support_to_scalar
-
-
-def scale_observation(t: np.array):
-    return (t - np.min(t)) / (np.max(t) - np.min(t))
-
-
-def scale_state(state: np.array):
-    _min = state.min(keepdims=True)
-    _max = state.max(keepdims=True)
-    state = (state - _min) / (_max - _min)
-    return state
 
 
 def scale_hidden_state(t: tf.Tensor):
@@ -28,11 +19,10 @@ def scale_hidden_state(t: tf.Tensor):
 
 
 def build_policy_logits(policy_logits: tf.Tensor):
-    return {i: tf.squeeze(logit) for i, logit in enumerate(policy_logits[0])}
-    # return {Action(i): tf.squeeze(logit) for i, logit in enumerate(policy_logits[0])}
+    return {Action(i): logit for i, logit in enumerate(policy_logits[0])}
 
 
-class Prediction(Model):
+class Prediction(Model, ABC):
     def __init__(self, action_state_size: int, hidden_state_size: int, support_size: int):
         """
         p^k, v^k = f_0(s^k)
@@ -46,6 +36,7 @@ class Prediction(Model):
         self.policy = Dense(action_state_size, name="f_policy")
         self.value = Dense(2 * support_size + 1, name="f_value")
 
+    @tf.function
     def call(self, hidden_state, **kwargs) -> Tuple[tf.Tensor, tf.Tensor]:
         """
         :param hidden_state
@@ -61,7 +52,7 @@ class Prediction(Model):
         return policy, value
 
 
-class Dynamics(Model):
+class Dynamics(Model, ABC):
     def __init__(self, hidden_state_size: int, enc_space_size: int, support_size: int):
         """
         r^k, s^k = g_0(s^(k-1), a^k)
@@ -75,6 +66,7 @@ class Dynamics(Model):
         self.s_k = Dense(hidden_state_size, name="g_s_k", activation=tf.nn.relu)
         self.r_k = Dense(2 * support_size + 1, name="g_r_k")
 
+    @tf.function
     def call(self, encoded_space, **kwargs) -> Tuple[tf.Tensor, tf.Tensor]:
         """
         :param **kwargs:
@@ -91,7 +83,7 @@ class Dynamics(Model):
         return s_k, r_k
 
 
-class Representation(Model):
+class Representation(Model, ABC):
     def __init__(self, obs_space_size: int, hidden_state_size: int):
         """
         s^0 = h_0(o_1,...,o_t)
@@ -103,6 +95,7 @@ class Representation(Model):
         self.hidden = Dense(neurons, name="h_hidden", activation=tf.nn.relu)
         self.s_0 = Dense(hidden_state_size, name="h_s_0", activation=tf.nn.relu)
 
+    @tf.function
     def call(self, observation, **kwargs) -> tf.Tensor:
         """
         :param observation
@@ -195,10 +188,10 @@ class Network(object):
             hidden_state=s_0
         )
 
-    def recurrent_inference(self, hidden_state: tf.Tensor, action: int, training: bool = False) -> NetworkOutput:
+    def recurrent_inference(self, hidden_state: tf.Tensor, action: Action, training: bool = False) -> NetworkOutput:
         # dynamics + prediction function
         # dynamics (encoded_state)
-        one_hot = tf.one_hot([action], self.config.action_space_size)
+        one_hot = tf.one_hot([action.index], self.config.action_space_size)
         encoded_state = tf.concat([hidden_state, one_hot], axis=1)
 
         s_k, r_k = self.g_dynamics(encoded_state, training=training)

@@ -78,7 +78,9 @@ def tf_support_to_scalar(support: tf.Tensor, support_size: int) -> tf.Tensor:
     if support_size == 0:
         return support
 
+    probabilities = tf.nn.softmax(support)
+
     bins = tf.range(-support_size, support_size + 1, dtype=tf.float32)
-    value = tf.tensordot(tf.squeeze(support), tf.squeeze(bins), 1)
+    value = tf.tensordot(tf.squeeze(probabilities), tf.squeeze(bins), 1)
 
     return inverse_scalar_transform(value)
