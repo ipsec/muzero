@@ -52,6 +52,7 @@ def scalar_to_support(x: tf.Tensor, support_size: int, eps: float = 0.001) -> tf
     if support_size == 0:
         return x
 
+    x = tf.reshape(x, shape=(1,1))
     x = tf.math.sign(x) * (tf.math.sqrt(tf.math.abs(x) + 1) - 1) + eps * x
 
     transformed = tf.clip_by_value(x, -support_size, support_size - 1e-6)
@@ -66,6 +67,8 @@ def scalar_to_support(x: tf.Tensor, support_size: int, eps: float = 0.001) -> tf
 
     updates = tf.squeeze(tf.concat([1 - prob, prob], axis=0))
     return tf.scatter_nd(indexes, updates, (1, 2 * support_size + 1))
+
+
 
 def support_to_scalar(x: tf.Tensor, support_size: int, eps: float = 0.001) -> tf.Tensor:
     if support_size == 0:
@@ -113,7 +116,7 @@ class MuZeroConfig(object):
         ### Training
         self.training_steps = int(1000e3)
         self.checkpoint_interval = 10
-        self.window_size = 200
+        self.window_size = int(1e6)
         self.batch_size = batch_size
         self.num_unroll_steps = 5
         self.td_steps = td_steps
@@ -141,9 +144,9 @@ class MuZeroConfig(object):
 def make_config() -> MuZeroConfig:
     return MuZeroConfig(
         max_moves=500,
-        discount=0.997,
+        discount=0.99,
         dirichlet_alpha=0.25,
-        num_simulations=10,
+        num_simulations=11,
         batch_size=32,
         td_steps=10,
         num_actors=8,
@@ -378,7 +381,10 @@ def create_representation_model(config: MuZeroConfig):
     inputs = Input(shape=input_shape, name='r_inputs')
     common = Dense(24, activation=tf.nn.relu, name='r_common')(inputs)
     hidden_state = Dense(config.env.observation_space.shape[0], activation=tf.nn.relu, name='r_hidden_state')(common)
-    return Model(inputs=inputs, outputs=hidden_state)
+    model = Model(inputs=inputs, outputs=hidden_state)
+    print(model.summary())
+    return model
+
 
 
 def create_dynamics_model(config: MuZeroConfig):
@@ -387,7 +393,9 @@ def create_dynamics_model(config: MuZeroConfig):
     common = Dense(24, activation=tf.nn.relu, name='d_common')(inputs)
     hidden_state = Dense(config.env.observation_space.shape[0], activation=tf.nn.relu, name='d_hidden_state')(common)
     reward = Dense(1, name='d_reward')(common)
-    return Model(inputs=inputs, outputs=[hidden_state, reward])
+    model = Model(inputs=inputs, outputs=[hidden_state, reward])
+    print(model.summary())
+    return model
 
 
 def create_prediction_model(config: MuZeroConfig):
@@ -395,8 +403,10 @@ def create_prediction_model(config: MuZeroConfig):
     inputs = Input(shape=input_shape, name='p_inputs')
     common = Dense(24, activation=tf.nn.relu, name='p_common')(inputs)
     policy = Dense(config.env.action_space.n, name='p_policy')(common)
-    value = Dense(1, name='p_value')(common)
-    return Model(inputs=inputs, outputs=[policy, value])
+    value = Dense(21, name='p_value')(common)
+    model = Model(inputs=inputs, outputs=[policy, value])
+    print(model.summary())
+    return model
 
 
 class FCNetwork(Network):
@@ -433,7 +443,6 @@ class FCNetwork(Network):
         self.load_weights()
         self.min_max_stats = MinMaxStats(config.known_bounds)
 
-
     def one_hot_tensor_encoder(self, hidden_state: tf.Tensor, action: Action):
         encoded_action = tf.expand_dims(tf.eye(self.config.env.action_space.n)[action], axis=0)
         encoded_state_action = tf.concat([hidden_state, encoded_action], axis=1)
@@ -446,7 +455,7 @@ class FCNetwork(Network):
         # value = support_to_scalar(value, 10)
 
         output = NetworkOutput(
-            value=value,
+            value=support_to_scalar(value, 10),
             reward=0.,
             policy_logits={i: v for i, v in enumerate(tf.squeeze(policy_logits))},
             hidden_state=hidden_state
@@ -461,7 +470,7 @@ class FCNetwork(Network):
         # value = support_to_scalar(value, 10)
 
         output = NetworkOutput(
-            value=value,
+            value=support_to_scalar(value, 10),
             reward=reward,
             policy_logits={i: v for i, v in enumerate(tf.squeeze(policy_logits))},
             hidden_state=hidden_state
@@ -471,10 +480,17 @@ class FCNetwork(Network):
     def get_trainable_weights(self):
         return self.representation.trainable_weights + self.dynamics.trainable_weights + self.prediction.trainable_weights
 
+    def get_weights(self):
+        return self.get_trainable_weights()
+
     def load_weights(self):
-        self.dynamics_checkpoint.restore(self.manager_dynamics.latest_checkpoint)
-        self.prediction_checkpoint.restore(self.manager_prediction.latest_checkpoint)
-        self.representation_checkpoint.restore(self.manager_representation.latest_checkpoint)
+        dynamics_latest_checkpoint =  self.manager_dynamics.restore_or_initialize()
+        prediction_latest_checkpoint = self.manager_prediction.restore_or_initialize()
+        representation_latest_checkpoint = self.manager_representation.restore_or_initialize()
+
+        self.dynamics_checkpoint.restore(dynamics_latest_checkpoint)
+        self.prediction_checkpoint.restore(prediction_latest_checkpoint)
+        self.representation_checkpoint.restore(representation_latest_checkpoint)
 
     def save_checkpoint(self):
         self.manager_dynamics.save()
@@ -522,14 +538,14 @@ class SharedStorage(object):
 def muzero(config: MuZeroConfig):
     storage = SharedStorage(config)
     replay_buffer = ReplayBuffer(config)
+    network = storage.latest_network()
+    storage.save_network(0, network)
 
-    thread_games = Thread(target=run_selfplay, args=(config, replay_buffer, storage))
-    thread_games.start()
-
-    while len(replay_buffer.buffer) < 10:
-        pass
-
-    train_network(config, storage, replay_buffer)
+    for i in range(100000):
+        run_selfplay(config, replay_buffer, storage, i)
+        train_network(config, network, replay_buffer, i)
+        if i % 10 == 0:
+            storage.save_network(i, network)
 
     return storage.latest_network()
 
@@ -541,18 +557,23 @@ def muzero(config: MuZeroConfig):
 # Each self-play job is independent of all others; it takes the latest network
 # snapshot, produces a game and makes it available to the training job by
 # writing it to a shared replay buffer.
-def run_selfplay(config: MuZeroConfig, replay_buffer: ReplayBuffer, storage: SharedStorage):
+def run_selfplay(config: MuZeroConfig, replay_buffer: ReplayBuffer, storage: SharedStorage, step: int):
 
+    game = play_game(config, storage, 0.3)
+    with summary_writer.as_default():
+        tf.summary.scalar('reward', np.sum(game.rewards), step=step)
+
+    replay_buffer.save_game(game)
+    storage.save_network_to_file(storage.latest_network())
+
+"""
     cpus = cpu_count() - 1
-    temperatures = [1.0, 0.5, 0.1]
+    temperatures = list(np.linspace(1.0, 0.1, num=cpus))
     step = 0
     with Pool(cpus) as pool:
         while True:
-            results = [
-                pool.apply_async(
-                    func=play_game,
-                    args=(config, np.random.choice(temperatures))
-                ) for _ in range(cpus)]
+            results = [pool.apply_async(func=play_game, args=(config, temperatures[i]))
+                       for i, _ in enumerate(range(cpus))]
             for p in results:
                 game = p.get()
                 with summary_writer.as_default():
@@ -561,13 +582,14 @@ def run_selfplay(config: MuZeroConfig, replay_buffer: ReplayBuffer, storage: Sha
                 step += 1
 
             storage.save_network_to_file(storage.latest_network())
+"""
 
 # Each game is produced by starting at the initial board position, then
 # repeatedly executing a Monte Carlo Tree Search to generate moves until the end
 # of the game is reached.
-def play_game(config: MuZeroConfig, temperature: float) -> Game:
+def play_game(config: MuZeroConfig, storage: SharedStorage, temperature: float) -> Game:
     game = config.new_game()
-    network = FCNetwork(config)
+    network = storage.latest_network()
 
     while not game.terminal() and len(game.history) < config.max_moves:
         min_max_stats = MinMaxStats(config.known_bounds)
@@ -696,6 +718,8 @@ def preprocess_batch(batch, config: MuZeroConfig):
 
     for target in targets:
         target_value, target_reward, target_policy = zip(*target)
+        if not target_policy:
+            continue
 
         # value
         target_value = [tf.reshape(tf.Variable(x, dtype=tf.float32), shape=(1, 1)) for x in target_value]
@@ -715,70 +739,74 @@ def preprocess_batch(batch, config: MuZeroConfig):
     return list(zip(observations, actions, new_targets))
 
 
-def train_network(config: MuZeroConfig, storage: SharedStorage,
-                  replay_buffer: ReplayBuffer):
-    network = FCNetwork(config)
+def train_network(config: MuZeroConfig, network: FCNetwork, replay_buffer: ReplayBuffer, step: int):
     optimizer = tf.keras.optimizers.Adam(learning_rate=config.lr_init)
 
-    for i in range(config.training_steps):
+    # for i in range(config.training_steps):
+    #if i % config.checkpoint_interval == 0:
+    #    storage.save_network(i, network)
 
-        if i % config.checkpoint_interval == 0:
-            storage.save_network(i, network)
+    batch = replay_buffer.sample_batch(config.num_unroll_steps, config.td_steps)
 
-        batch = replay_buffer.sample_batch(config.num_unroll_steps, config.td_steps)
-        batch = preprocess_batch(batch, config)
+    def compute_loss():
+        loss = 0
+        for image, actions, targets in batch:
+            # Initial step, from the real observation.
+            network_output = network.initial_inference(image)
+            hidden_state = network_output.hidden_state
+            predictions = [(1.0, network_output)]
 
-        def compute_loss():
-            loss = 0
-            for image, actions, targets in batch:
-                # Initial step, from the real observation.
-                network_output = network.initial_inference(image)
+            # Recurrent steps, from action and previous hidden state.
+            for action in actions:
+                network_output = network.recurrent_inference(hidden_state, action)
                 hidden_state = network_output.hidden_state
-                predictions = [(1.0, network_output)]
+                predictions.append((1.0 / len(actions), network_output))
 
-                # Recurrent steps, from action and previous hidden state.
-                for action in actions:
-                    network_output = network.recurrent_inference(hidden_state, action)
-                    hidden_state = network_output.hidden_state
-                    predictions.append((1.0 / len(actions), network_output))
+                hidden_state = scale_gradient(hidden_state, 0.5)
 
-                    hidden_state = scale_gradient(hidden_state, 0.5)
+            for k, (prediction, target) in enumerate(zip(predictions, targets)):
+                gradient_scale, network_output = prediction
+                target_value, target_reward, target_policy = target
 
-                for k, (prediction, target) in enumerate(zip(predictions, targets)):
-                    gradient_scale, network_output = prediction
-                    target_value, target_reward, target_policy = target
+                if not target_policy:
+                    continue
 
-                    policy_logits = tf.stack([list(network_output.policy_logits.values())])
+                policy_logits = tf.stack([list(network_output.policy_logits.values())])
 
-                    l = tf.nn.softmax_cross_entropy_with_logits(
-                        logits=policy_logits, labels=target_policy)
+                l = tf.math.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(
+                    logits=policy_logits, labels=target_policy))
 
-                    l += scalar_loss(network_output.value, target_value)
+                l += tf.math.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(
+                    logits=scalar_to_support(network_output.value, 10),
+                    labels=scalar_to_support(target_value, 10))
+                )
 
-                    if k > 0:
-                        l += scalar_loss(network_output.reward, target_reward)
+                if k > 0:
+                    l += tf.math.reduce_mean(tf.keras.losses.MSE(network_output.reward, target_reward))
 
-                    loss += scale_gradient(l, gradient_scale)
-            loss /= config.batch_size
+                loss += scale_gradient(l, gradient_scale)
+        loss /= config.batch_size
 
-            for weights in network.get_weights():
-                loss += config.weight_decay * tf.nn.l2_loss(weights)
-
-            loss_total(loss)
-            return loss
-
-        optimizer.minimize(compute_loss, network.get_trainable_weights())
-
-        # grads = tape.gradient(loss, trainable_weights)
-        # optimizer.apply_gradients(zip(grads, trainable_weights))
-
-        with summary_writer.as_default():
-            tf.summary.scalar('loss total', loss_total.result(), step=i)
-
-        loss_total.reset_state()
+        for weights in network.get_weights():
+            try:
+                tf.debugging.check_numerics(weights, message='Checking b')
+            except Exception as e:
+                ic(weights)
+                assert "Checking weight : Tensor had NaN values" in e.message
 
 
-    # storage.save_network(config.training_steps, network)
+            diff = config.weight_decay * tf.nn.l2_loss(weights)
+            loss += diff
+
+        loss_total(loss)
+        return loss
+
+    optimizer.minimize(compute_loss, network.get_trainable_weights())
+
+    with summary_writer.as_default():
+        tf.summary.scalar('loss total', loss_total.result(), step=step)
+
+    loss_total.reset_state()
 
 
 def scale_gradient(tensor: Any, scale):
@@ -836,7 +864,6 @@ def update_weights2(optimizer: tf.keras.optimizers.Optimizer, network: Network, 
             for weights in trainable_weights:
                 loss = tf.add(loss, weight_decay * tf.nn.l2_loss(weights))
 
-        ic(loss)
         loss_total(loss)
         grads = tape.gradient(loss, trainable_weights)
         optimizer.apply_gradients(zip(grads, trainable_weights))
