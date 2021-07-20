@@ -6,24 +6,23 @@
 
 import collections
 import math
-import traceback
+import random
 import typing
-from multiprocessing import Pool, cpu_count
 from pathlib import Path
-from threading import Thread
 from typing import Any, Dict, List, Optional
 
 import gym
 import numpy as np
 import tensorflow as tf
-from tensorflow.keras import Model
-from tensorflow.keras.layers import Dense, Input
 from icecream import ic
-
+from tensorflow.keras import Model
+from tensorflow.keras.layers import Dense
 
 ##########################
 ####### Helpers ##########
 
+
+MAXIMUM_FLOAT_VALUE = float('inf')
 
 KnownBounds = collections.namedtuple('KnownBounds', ['min', 'max'])
 
@@ -32,8 +31,8 @@ class MinMaxStats(object):
     """A class that holds the min-max values of the tree."""
 
     def __init__(self, known_bounds: Optional[KnownBounds]):
-        self.maximum = known_bounds.max if known_bounds else -float('inf')
-        self.minimum = known_bounds.min if known_bounds else float('inf')
+        self.maximum = known_bounds.max if known_bounds else -MAXIMUM_FLOAT_VALUE
+        self.minimum = known_bounds.min if known_bounds else MAXIMUM_FLOAT_VALUE
 
     def update(self, value: float):
         self.maximum = max(self.maximum, value)
@@ -45,41 +44,10 @@ class MinMaxStats(object):
             return (value - self.minimum) / (self.maximum - self.minimum)
         return value
 
+
 def scale(t: tf.Tensor):
+    # return (t - np.min(t)) / (np.max(t) - np.min(t))
     return (t - tf.reduce_min(t)) / (tf.reduce_max(t) - tf.reduce_min(t))
-
-def scalar_to_support(x: tf.Tensor, support_size: int, eps: float = 0.001) -> tf.Tensor:
-    if support_size == 0:
-        return x
-
-    x = tf.reshape(x, shape=(1,1))
-    x = tf.math.sign(x) * (tf.math.sqrt(tf.math.abs(x) + 1) - 1) + eps * x
-
-    transformed = tf.clip_by_value(x, -support_size, support_size - 1e-6)
-    floored = tf.floor(transformed)
-    prob = transformed - floored
-
-    idx_0 = tf.expand_dims(tf.cast(tf.squeeze(floored + support_size), dtype=tf.int32), -1)
-    idx_1 = tf.expand_dims(tf.cast(tf.squeeze(floored + support_size + 1), dtype=tf.int32), -1)
-    idx_0 = tf.stack([tf.range(x.shape[1]), idx_0])
-    idx_1 = tf.stack([tf.range(x.shape[1]), idx_1])
-    indexes = tf.squeeze(tf.stack([idx_0, idx_1]))
-
-    updates = tf.squeeze(tf.concat([1 - prob, prob], axis=0))
-    return tf.scatter_nd(indexes, updates, (1, 2 * support_size + 1))
-
-
-
-def support_to_scalar(x: tf.Tensor, support_size: int, eps: float = 0.001) -> tf.Tensor:
-    if support_size == 0:
-        return x
-
-    x = tf.nn.softmax(x)
-    bins = tf.range(-support_size, support_size + 1, dtype=tf.float32)
-    v = tf.tensordot(tf.squeeze(x), tf.squeeze(bins), 1)
-
-    value = tf.math.sign(v) * (((tf.math.sqrt(1. + 4. * eps * (tf.math.abs(v) + 1 + eps)) - 1) / (2 * eps)) ** 2 - 1)
-    return tf.expand_dims([value], axis=0)
 
 class MuZeroConfig(object):
 
@@ -146,11 +114,11 @@ def make_config() -> MuZeroConfig:
         max_moves=500,
         discount=0.99,
         dirichlet_alpha=0.25,
-        num_simulations=11,
-        batch_size=32,
+        num_simulations=25,
+        batch_size=128,
         td_steps=10,
-        num_actors=8,
-        lr_init=0.05,
+        num_actors=1,
+        lr_init=0.001,
         lr_decay_steps=350e3,
         #known_bounds=KnownBounds(0, 1),
     )
@@ -215,7 +183,7 @@ class ActionHistory(object):
         return self.history[-1]
 
     def action_space(self) -> List[Action]:
-        return list(range(self.action_space_size))
+        return [Action(i) for i in range(self.action_space_size)]
 
     def to_play(self) -> Player:
         return Player()
@@ -240,7 +208,7 @@ class Game(object):
         self.root_values = []
         self.action_space_size = action_space_size
         self.discount = discount
-        self.actions = list(range(self.action_space_size))
+        self.actions = list(map(lambda i: Action(i), range(self.action_space_size)))
         # self.env = gym.make('LunarLander-v2')
         self.env = gym.make('CartPole-v1')
         self.states.append(self.env.reset())
@@ -257,25 +225,24 @@ class Game(object):
         return self.actions
 
     def apply(self, action: Action):
-        observation, reward, done, info = self.env.step(action)
+        observation, reward, done, info = self.env.step(action.index)
         self.done = done
         self.states.append(observation)
         self.rewards.append(reward)
         self.history.append(action)
 
-
     def store_search_statistics(self, root: Node):
         sum_visits = sum(child.visit_count for child in root.children.values())
-        #action_space = (Action(index) for index in range(self.action_space_size))
-        action_space = list(range(self.action_space_size))
+        action_space = (Action(index) for index in range(self.action_space_size))
         self.child_visits.append([
             root.children[a].visit_count / sum_visits if a in root.children else 0
             for a in action_space
         ])
         self.root_values.append(root.value())
 
+
     def make_image(self, state_index: int):
-        return np.atleast_2d(self.states[state_index])
+        return self.states[state_index]
 
     def make_target(self, state_index: int, num_unroll_steps: int, td_steps: int,
                     to_play: Player):
@@ -295,8 +262,7 @@ class Game(object):
             if current_index > 0 and current_index <= len(self.rewards):
                 last_reward = self.rewards[current_index - 1]
             else:
-                last_reward = 0.
-                #last_reward = None
+                last_reward = None
 
             if current_index < len(self.root_values):
                 targets.append((value, last_reward, self.child_visits[current_index]))
@@ -327,20 +293,17 @@ class ReplayBuffer(object):
     def sample_batch(self, num_unroll_steps: int, td_steps: int):
         games = [self.sample_game() for _ in range(self.batch_size)]
         game_pos = [(g, self.sample_position(g)) for g in games]
-        batch = [(g.make_image(i), g.history[i:i + num_unroll_steps],
+        return [(g.make_image(i), g.history[i:i + num_unroll_steps],
                  g.make_target(i, num_unroll_steps, td_steps, g.to_play()))
                 for (g, i) in game_pos]
 
-        return batch
-
-
     def sample_game(self) -> Game:
-        # Sample game from buffer either uniformly or according to some priority.
         return np.random.choice(self.buffer)
+        #return choice(self.buffer)
 
     def sample_position(self, game) -> int:
-        # Sample position from game either uniformly or according to some priority.
         return np.random.choice(len(game.history))
+        #return randrange(len(game.history))
 
 
 class NetworkOutput(typing.NamedTuple):
@@ -376,112 +339,157 @@ class Network(object):
         return []
 
 
-def create_representation_model(config: MuZeroConfig):
-    input_shape = (config.env.observation_space.shape[0], )
-    inputs = Input(shape=input_shape, name='r_inputs')
-    common = Dense(24, activation=tf.nn.relu, name='r_common')(inputs)
-    hidden_state = Dense(config.env.observation_space.shape[0], activation=tf.nn.relu, name='r_hidden_state')(common)
-    model = Model(inputs=inputs, outputs=hidden_state)
-    print(model.summary())
+def create_representation_model(config: MuZeroConfig, weight_decay: float = 1e-4):
+    input_size = config.env.observation_space.shape[0]
+    model = tf.keras.models.Sequential()
+    model.add(Dense(input_size, activation=tf.nn.relu, name="representation_input"))
+    model.add(Dense(512, name='representation_output', activation=tf.nn.relu))
+    return model
+
+def create_dynamics_model(config: MuZeroConfig, weight_decay: float = 1e-4):
+    # input_size = config.env.observation_space.shape[0] + config.env.action_space.n
+    input_size = 512 + config.env.action_space.n
+    output_size = config.env.observation_space.shape[0]
+    model = tf.keras.models.Sequential()
+    model.add(Dense(input_size, activation=tf.nn.relu, name="dynamics_input"))
+    model.add(Dense(512, name='dynamics_output', activation=tf.nn.relu))
+    return model
+
+def create_value_model(config: MuZeroConfig, weight_decay: float = 1e-4):
+    input_size = config.env.observation_space.shape[0]
+    model = tf.keras.models.Sequential()
+    model.add(Dense(input_size, activation=tf.nn.relu, name="value_input"))
+    model.add(Dense(101, name='value_output'))
+    return model
+
+def create_policy_model(config: MuZeroConfig, weight_decay: float = 1e-4):
+    input_size = config.env.observation_space.shape[0]
+    output_size = config.env.action_space.n
+    model = tf.keras.models.Sequential()
+    model.add(Dense(input_size, activation=tf.nn.relu, name="policy_input"))
+    model.add(Dense(output_size, name='policy_output'))
+    return model
+
+def create_reward_model(config: MuZeroConfig, weight_decay: float = 1e-4):
+    input_size = config.env.observation_space.shape[0] + config.env.action_space.n
+    model = tf.keras.models.Sequential()
+    model.add(Dense(input_size, activation=tf.nn.relu, name="reward_input"))
+    model.add(Dense(1, name='reward_output'))
     return model
 
 
+class InitialModel(Model):
+    """Model that combine the representation and prediction (value+policy) network."""
 
-def create_dynamics_model(config: MuZeroConfig):
-    input_shape = (config.env.observation_space.shape[0] + config.env.action_space.n, )
-    inputs = Input(shape=input_shape, name='d_inputs')
-    common = Dense(24, activation=tf.nn.relu, name='d_common')(inputs)
-    hidden_state = Dense(config.env.observation_space.shape[0], activation=tf.nn.relu, name='d_hidden_state')(common)
-    reward = Dense(1, name='d_reward')(common)
-    model = Model(inputs=inputs, outputs=[hidden_state, reward])
-    print(model.summary())
-    return model
+    def __init__(self, representation_network: Model, value_network: Model, policy_network: Model):
+        super(InitialModel, self).__init__()
+        self.representation_network = representation_network
+        self.value_network = value_network
+        self.policy_network = policy_network
+
+    def call(self, image):
+        hidden_representation = self.representation_network(image)
+        hidden_representation = scale(hidden_representation)
+        value = self.value_network(hidden_representation)
+        policy_logits = self.policy_network(hidden_representation)
+        return hidden_representation, value, policy_logits
 
 
-def create_prediction_model(config: MuZeroConfig):
-    input_shape = (config.env.observation_space.shape[0], )
-    inputs = Input(shape=input_shape, name='p_inputs')
-    common = Dense(24, activation=tf.nn.relu, name='p_common')(inputs)
-    policy = Dense(config.env.action_space.n, name='p_policy')(common)
-    value = Dense(21, name='p_value')(common)
-    model = Model(inputs=inputs, outputs=[policy, value])
-    print(model.summary())
-    return model
+class RecurrentModel(Model):
+    """Model that combine the dynamic, reward and prediction (value+policy) network."""
+
+    def __init__(self, dynamic_network: Model, reward_network: Model, value_network: Model, policy_network: Model):
+        super(RecurrentModel, self).__init__()
+        self.dynamic_network = dynamic_network
+        self.reward_network = reward_network
+        self.value_network = value_network
+        self.policy_network = policy_network
+
+    def call(self, conditioned_hidden):
+        hidden_state = self.dynamic_network(conditioned_hidden)
+        reward = self.reward_network(conditioned_hidden)
+        value = self.value_network(hidden_state)
+        policy_logits = self.policy_network(hidden_state)
+        hidden_state = scale(hidden_state)
+        return hidden_state, reward, value, policy_logits
 
 
 class FCNetwork(Network):
+    # policy -> uniform, value -> 0, reward -> 0
+
     def __init__(self, config: MuZeroConfig):
         super(FCNetwork).__init__()
         self.config = config
         self.representation = create_representation_model(self.config)
         self.dynamics = create_dynamics_model(self.config)
-        self.prediction = create_prediction_model(self.config)
-        self.dynamics_checkpoint = tf.train.Checkpoint(model=self.dynamics)
-        self.prediction_checkpoint = tf.train.Checkpoint(model=self.prediction)
-        self.representation_checkpoint = tf.train.Checkpoint(model=self.representation)
+        # self.prediction = create_prediction_model(self.config)
+        self.value = create_value_model(self.config)
+        self.policy = create_policy_model(self.config)
+        self.reward = create_reward_model(self.config)
+        self.initial_model = InitialModel(self.representation, self.value, self.policy)
+        self.recurrent_model = RecurrentModel(self.dynamics, self.reward, self.value, self.policy)
 
-        self.dynamics_checkpoint_path = './data/muzero/saves/Dynamics'
-        Path.mkdir(Path(self.dynamics_checkpoint_path), parents=True, exist_ok=True)
-        self.manager_dynamics = tf.train.CheckpointManager(self.dynamics_checkpoint,
-                                                           directory=self.dynamics_checkpoint_path,
-                                                           max_to_keep=5)
+        #self.dynamics_checkpoint = tf.train.Checkpoint(model=self.dynamics)
+        #self.prediction_checkpoint = tf.train.Checkpoint(model=self.prediction)
+        #self.representation_checkpoint = tf.train.Checkpoint(model=self.representation)
 
-        self.prediction_checkpoint_path = './data/muzero/saves/Prediction'
-        Path.mkdir(Path(self.prediction_checkpoint_path), parents=True, exist_ok=True)
-        self.manager_prediction = tf.train.CheckpointManager(self.prediction_checkpoint,
-                                                             directory=self.prediction_checkpoint_path,
-                                                             max_to_keep=5)
+        #self.dynamics_checkpoint_path = './data/muzero/saves/Dynamics'
+        #Path.mkdir(Path(self.dynamics_checkpoint_path), parents=True, exist_ok=True)
+        #self.manager_dynamics = tf.train.CheckpointManager(self.dynamics_checkpoint,
+        # directory=self.dynamics_checkpoint_path,
+        # max_to_keep=5)
 
-        self.representation_checkpoint_path = './data/muzero/saves/Representation'
-        Path.mkdir(Path(self.representation_checkpoint_path), parents=True, exist_ok=True)
-        self.manager_representation = tf.train.CheckpointManager(self.representation_checkpoint,
-                                                                 directory=self.representation_checkpoint_path,
-                                                                 max_to_keep=5)
+        #self.prediction_checkpoint_path = './data/muzero/saves/Prediction'
+        #Path.mkdir(Path(self.prediction_checkpoint_path), parents=True, exist_ok=True)
+        #self.manager_prediction = tf.train.CheckpointManager(self.prediction_checkpoint,
+        # directory=self.prediction_checkpoint_path,
+        # max_to_keep=5)
+
+        #self.representation_checkpoint_path = './data/muzero/saves/Representation'
+        #Path.mkdir(Path(self.representation_checkpoint_path), parents=True, exist_ok=True)
+        #self.manager_representation = tf.train.CheckpointManager(self.representation_checkpoint,
+        # directory=self.representation_checkpoint_path,
+        # max_to_keep=5)
 
 
 
-        self.load_weights()
+        #self.load_weights()
         self.min_max_stats = MinMaxStats(config.known_bounds)
 
-    def one_hot_tensor_encoder(self, hidden_state: tf.Tensor, action: Action):
-        encoded_action = tf.expand_dims(tf.eye(self.config.env.action_space.n)[action], axis=0)
-        encoded_state_action = tf.concat([hidden_state, encoded_action], axis=1)
-        return encoded_state_action
+    def initial_inference(self, image: np.array) -> NetworkOutput:
+        """representation + prediction function"""
 
-    def initial_inference(self, observation) -> NetworkOutput:
-        hidden_state = self.representation(observation)
-        hidden_state = scale(hidden_state)
-        policy_logits, value = self.prediction(hidden_state)
-        # value = support_to_scalar(value, 10)
+        hidden_representation, value, policy_logits = self.initial_model(np.expand_dims(image, 0))
 
-        output = NetworkOutput(
-            value=support_to_scalar(value, 10),
-            reward=0.,
-            policy_logits={i: v for i, v in enumerate(tf.squeeze(policy_logits))},
-            hidden_state=hidden_state
-        )
+        output = NetworkOutput(value=support_to_scalar(value, 50),
+                               reward=0.,
+                               policy_logits={Action(i): float(logit) for i, logit in enumerate(policy_logits[0])},
+                               hidden_state=hidden_representation[0].numpy())
         return output
 
-    def recurrent_inference(self, hidden_state, action) -> NetworkOutput:
-        encoded_hidden_state = self.one_hot_tensor_encoder(hidden_state, action)
-        hidden_state, reward = self.dynamics(encoded_hidden_state)
-        hidden_state = scale(hidden_state)
-        policy_logits, value = self.prediction(hidden_state)
-        # value = support_to_scalar(value, 10)
+    def recurrent_inference(self, hidden_state: np.array, action: Action) -> NetworkOutput:
+        """dynamics + prediction function"""
 
-        output = NetworkOutput(
-            value=support_to_scalar(value, 10),
-            reward=reward,
-            policy_logits={i: v for i, v in enumerate(tf.squeeze(policy_logits))},
-            hidden_state=hidden_state
-        )
+        conditioned_hidden = self.get_conditioned_hidden(hidden_state, action)
+        hidden_representation, reward, value, policy_logits = self.recurrent_model(conditioned_hidden)
+        output = NetworkOutput(value=support_to_scalar(value, 50),
+                               reward=float(reward),
+                               policy_logits={Action(i): float(logit) for i, logit in enumerate(policy_logits[0])},
+                               hidden_state=hidden_representation[0].numpy())
         return output
+
+    def get_conditioned_hidden(self, hidden: np.ndarray, action: Action):
+        conditioned_hidden = np.concatenate((hidden, np.eye(self.config.env.action_space.n)[action.index]))
+        return np.expand_dims(conditioned_hidden, axis=0)
 
     def get_trainable_weights(self):
-        return self.representation.trainable_weights + self.dynamics.trainable_weights + self.prediction.trainable_weights
+        return self.representation.trainable_weights + self.dynamics.trainable_weights + self.value.trainable_weights + self.reward.trainable_weights + self.policy.trainable_weights
 
     def get_weights(self):
         return self.get_trainable_weights()
+
+    def get_trainable_variables(self):
+        return self.representation.variables + self.dynamics.variables + self.value.variables + self.reward.variables + self.policy.variables
 
     def load_weights(self):
         dynamics_latest_checkpoint =  self.manager_dynamics.restore_or_initialize()
@@ -497,6 +505,37 @@ class FCNetwork(Network):
         self.manager_prediction.save()
         self.manager_representation.save()
 
+def support_to_scalar(x: np.ndarray, support_size: int, var_eps: float = 0.001) -> np.ndarray:
+    if support_size == 0:  # Simple regression (support in this case can be the mean of a Gaussian)
+        return x
+
+    x = tf.nn.softmax(x)
+
+    bins = np.arange(-support_size, support_size + 1)
+    y = np.dot(x, bins)
+
+    value = np.sign(y) * (((np.sqrt(1 + 4 * var_eps * (np.abs(y) + 1 + var_eps)) - 1) / (2 * var_eps)) ** 2 - 1)
+
+    return value.item()
+
+def scalar_to_support(x: np.ndarray, support_size: int, var_eps: float = 0.001) -> np.ndarray:
+
+    if support_size == 0:  # Simple regression (support in this case can be the mean of a Gaussian)
+        return x
+
+    # Clip float to fit within the support_size. Values exceeding this will be assigned to the closest bin.
+
+    transformed = np.clip(np.sign(x) * (np.sqrt(np.abs(x) + 1) - 1) + var_eps * x,
+                          a_min=-support_size, a_max=support_size - 1e-8)
+    floored = np.floor(transformed).astype(int)  # Lower-bound support integer
+    prob = transformed - floored  # Proportion between adjacent integers
+
+    bins = np.zeros((len(x), 2 * support_size + 1))
+
+    bins[np.arange(len(x)), floored + support_size] = 1 - prob
+    bins[np.arange(len(x)), floored + support_size + 1] = prob
+
+    return bins
 
 def latest_file(path: Path, pattern: str = "*/[0-9]*"):
     if path.exists():
@@ -546,6 +585,7 @@ def muzero(config: MuZeroConfig):
         train_network(config, network, replay_buffer, i)
         if i % 10 == 0:
             storage.save_network(i, network)
+            #storage.save_network_to_file(storage.latest_network())
 
     return storage.latest_network()
 
@@ -564,7 +604,6 @@ def run_selfplay(config: MuZeroConfig, replay_buffer: ReplayBuffer, storage: Sha
         tf.summary.scalar('reward', np.sum(game.rewards), step=step)
 
     replay_buffer.save_game(game)
-    storage.save_network_to_file(storage.latest_network())
 
 """
     cpus = cpu_count() - 1
@@ -639,8 +678,11 @@ def run_mcts(config: MuZeroConfig, root: Node, action_history: ActionHistory,
                       config.discount, min_max_stats)
 
 
-def select_action(config: MuZeroConfig, num_moves: int, node: Node, network: Network, temperature: int = 0):
-    visit_counts = [(child.visit_count, action) for action, child in node.children.items()]
+def select_action(config: MuZeroConfig, num_moves: int, node: Node,
+                  network: Network, temperature: float = 0.35):
+    visit_counts = [
+        (child.visit_count, action) for action, child in node.children.items()
+    ]
     return softmax_sample(visit_counts, temperature)
 
 
@@ -710,34 +752,6 @@ def add_exploration_noise(config: MuZeroConfig, node: Node):
 
 ##################################
 ####### Part 2: Training #########
-def preprocess_batch(batch, config: MuZeroConfig):
-    # Preprocessing batch data
-    observations, actions, targets = zip(*batch)
-
-    new_targets = []
-
-    for target in targets:
-        target_value, target_reward, target_policy = zip(*target)
-        if not target_policy:
-            continue
-
-        # value
-        target_value = [tf.reshape(tf.Variable(x, dtype=tf.float32), shape=(1, 1)) for x in target_value]
-
-        # reward
-        target_reward = [tf.reshape(tf.Variable(x, dtype=tf.float32), shape=(1, 1)) for x in target_reward]
-
-        # policy
-        obs_size = config.env.action_space.n
-        target_policy = [
-            tf.reshape(tf.Variable([0.] * obs_size, dtype=tf.float32), shape=(1, obs_size)) if not v else
-            tf.reshape(tf.Variable(v, dtype=tf.float32), shape=(1, obs_size)) for v in target_policy
-        ]
-
-        new_targets.append(tuple(zip(target_value, target_reward, target_policy)))
-
-    return list(zip(observations, actions, new_targets))
-
 
 def train_network(config: MuZeroConfig, network: FCNetwork, replay_buffer: ReplayBuffer, step: int):
     optimizer = tf.keras.optimizers.Adam(learning_rate=config.lr_init)
@@ -747,87 +761,27 @@ def train_network(config: MuZeroConfig, network: FCNetwork, replay_buffer: Repla
     #    storage.save_network(i, network)
 
     batch = replay_buffer.sample_batch(config.num_unroll_steps, config.td_steps)
-
-    def compute_loss():
-        loss = 0
-        for image, actions, targets in batch:
-            # Initial step, from the real observation.
-            network_output = network.initial_inference(image)
-            hidden_state = network_output.hidden_state
-            predictions = [(1.0, network_output)]
-
-            # Recurrent steps, from action and previous hidden state.
-            for action in actions:
-                network_output = network.recurrent_inference(hidden_state, action)
-                hidden_state = network_output.hidden_state
-                predictions.append((1.0 / len(actions), network_output))
-
-                hidden_state = scale_gradient(hidden_state, 0.5)
-
-            for k, (prediction, target) in enumerate(zip(predictions, targets)):
-                gradient_scale, network_output = prediction
-                target_value, target_reward, target_policy = target
-
-                if not target_policy:
-                    continue
-
-                policy_logits = tf.stack([list(network_output.policy_logits.values())])
-
-                l = tf.math.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(
-                    logits=policy_logits, labels=target_policy))
-
-                l += tf.math.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(
-                    logits=scalar_to_support(network_output.value, 10),
-                    labels=scalar_to_support(target_value, 10))
-                )
-
-                if k > 0:
-                    l += tf.math.reduce_mean(tf.keras.losses.MSE(network_output.reward, target_reward))
-
-                loss += scale_gradient(l, gradient_scale)
-        loss /= config.batch_size
-
-        for weights in network.get_weights():
-            try:
-                tf.debugging.check_numerics(weights, message='Checking b')
-            except Exception as e:
-                ic(weights)
-                assert "Checking weight : Tensor had NaN values" in e.message
-
-
-            diff = config.weight_decay * tf.nn.l2_loss(weights)
-            loss += diff
-
-        loss_total(loss)
-        return loss
-
-    optimizer.minimize(compute_loss, network.get_trainable_weights())
-
-    with summary_writer.as_default():
-        tf.summary.scalar('loss total', loss_total.result(), step=step)
-
-    loss_total.reset_state()
-
+    update_weights(optimizer, network, batch, config.weight_decay, step)
 
 def scale_gradient(tensor: Any, scale):
     """Scales the gradient for the backward pass."""
     return tensor * scale + tf.stop_gradient(tensor) * (1 - scale)
 
-
-def update_weights2(optimizer: tf.keras.optimizers.Optimizer, network: Network, batch,
-                   weight_decay: float):
-    loss = tf.Variable(0.)
-    trainable_weights = network.get_trainable_weights()
+def update_weights(optimizer: tf.keras.optimizers.Optimizer, network: FCNetwork, batch, weight_decay: float, step: int):
+    loss = tf.constant(0., dtype=tf.float32)
+    trainable_variables = network.get_trainable_variables()
 
     with tf.GradientTape() as tape:
         for image, actions, targets in batch:
             # Initial step, from the real observation.
-            value, reward, policy_logits, hidden_state = network.initial_inference(image)
-            predictions = [(1.0, value, reward, policy_logits)]
+            observation = np.expand_dims(image, 0)
+            hidden_state, value, policy_logits = network.initial_model(observation)
+            predictions = [(1.0, value, 0., policy_logits)]
 
             # Recurrent steps, from action and previous hidden state.
             for action in actions:
-                value, reward, policy_logits, hidden_state = network.recurrent_inference(hidden_state, action)
+                conditioned_hidden = network.get_conditioned_hidden(hidden_state[0], action)
+                hidden_state, reward, value, policy_logits = network.recurrent_model(conditioned_hidden)
                 predictions.append((1.0 / len(actions), value, reward, policy_logits))
                 hidden_state = scale_gradient(hidden_state, 0.5)
 
@@ -836,43 +790,61 @@ def update_weights2(optimizer: tf.keras.optimizers.Optimizer, network: Network, 
                 gradient_scale, value, reward, policy_logits = prediction
                 target_value, target_reward, target_policy = target
 
+
+                #ic(target_policy)
+                #ic(policy_logits)
+                if not target_policy:
+                    policy_loss = tf.constant(0., dtype=tf.float32)
+                else:
+                    policy_logits = policy_logits[0]
+                    target_policy = tf.convert_to_tensor(target_policy)
+                    policy_loss = tf.nn.softmax_cross_entropy_with_logits(labels=target_policy, logits=policy_logits)
+
+                if not target_reward:
+                    reward_loss = tf.constant(0., dtype=tf.float32)
+                else:
+                    reward_loss = scalar_loss(prediction=tf.convert_to_tensor([reward]),
+                                              target=tf.convert_to_tensor([target_reward]))
+
                 # Value Loss
-                value_loss = tf.keras.losses.CategoricalCrossentropy(from_logits=True)(
-                    y_true=scalar_to_support(target_value, 10),
-                    y_pred=scalar_to_support(value, 10)
-                )
+                value_loss = tf.squeeze(tf.cast(tf.nn.softmax_cross_entropy_with_logits(
+                    labels=scalar_to_support(np.array([target_value]), 50),
+                    logits=value,
+                ), dtype=tf.float32))
 
-                # Reward Loss
-                reward_loss = scalar_loss(reward, target_reward)
+                if tf.math.is_nan(value_loss) or tf.math.is_nan(reward_loss) or tf.math.is_nan(policy_loss):
+                    ic(value_loss)
+                    ic(target_value)
+                    ic(reward_loss)
+                    ic(policy_loss)
+                    exit(-1)
 
-                # Policy Loss
-                policy_logits = tf.stack([list(policy_logits.values())])
-                policy_loss = tf.keras.losses.CategoricalCrossentropy(from_logits=True)(
-                    y_true=target_policy,
-                    y_pred=policy_logits
-                )
+                l = policy_loss
+                l += value_loss
+                l += reward_loss
 
-                loss_value(value_loss)
-                loss_reward(reward_loss)
-                loss_policy(policy_loss)
+                loss += scale_gradient(l, gradient_scale)
 
-                l = tf.add(tf.add(value_loss, reward_loss), policy_loss)
+            for weights in network.get_weights():
+                loss += weight_decay * tf.nn.l2_loss(weights)
 
-                loss = tf.add(loss, scale_gradient(l, gradient_scale))
-                # loss += scale_gradient(l, gradient_scale)
+        loss /= len(batch)
+        grads = tape.gradient(loss, trainable_variables)
+        ic(loss)
 
-            for weights in trainable_weights:
-                loss = tf.add(loss, weight_decay * tf.nn.l2_loss(weights))
+    optimizer.apply_gradients(zip(grads, trainable_variables))
+    loss_total(loss)
 
-        loss_total(loss)
-        grads = tape.gradient(loss, trainable_weights)
-        optimizer.apply_gradients(zip(grads, trainable_weights))
+    with summary_writer.as_default():
+        tf.summary.scalar('loss total', loss_total.result(), step=step)
 
-
+    loss_total.reset_state()
 
 def scalar_loss(prediction, target) -> float:
     # MSE in board games, cross entropy between categorical values in Atari.
-    return tf.reduce_sum(tf.square(tf.cast(target, tf.float32) - tf.cast(prediction, tf.float32)))
+    prediction = tf.reshape(prediction, shape=(1,))
+    target = tf.reshape(target, shape=(1,))
+    return tf.losses.mean_squared_error(target, prediction)
 
 
 ######### End Training ###########
