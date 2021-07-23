@@ -5,7 +5,9 @@
 # pylint: disable=g-explicit-length-test
 
 import collections
+import datetime
 import random
+import time
 import typing
 from itertools import zip_longest
 from pathlib import Path
@@ -19,6 +21,8 @@ from icecream import ic
 from tensorflow.keras.losses import MSE
 from tensorflow.keras import Model
 from tensorflow.keras.layers import Dense
+from timeit import default_timer as timer
+
 
 ##########################
 ####### Helpers ##########
@@ -665,12 +669,15 @@ def muzero(config: MuZeroConfig):
     step = 10
 
     for i in range(100000):
+        start = timer()
         network = storage.latest_network()
         run_selfplay(config, replay_buffer, storage, i)
-        if i % step == 0:
-            train_network(config, network, optimizer, replay_buffer, int(i / step))
-            # storage.save_network(i, network)
-            # storage.save_network_to_file(storage.latest_network())
+        #if i % step == 0:
+        train_network(config, network, optimizer, replay_buffer, int(i / step))
+        # storage.save_network(i, network)
+        # storage.save_network_to_file(storage.latest_network())
+        elapsed = start - timer()
+        ic(elapsed)
 
     return storage.latest_network()
 
@@ -1040,5 +1047,4 @@ if __name__ == "__main__":
     data_path = Path("./data/muzero")
     data_path.mkdir(parents=True, exist_ok=True)
     summary_writer = tf.summary.create_file_writer(str(data_path) + "/summary/")
-
     muzero(make_config())
