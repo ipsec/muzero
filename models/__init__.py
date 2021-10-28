@@ -1,10 +1,11 @@
 import tensorflow as tf
-from games.game import Action
 from typing import Dict, List, NamedTuple
+
+from games.game import Action
 
 
 class NetworkOutput(NamedTuple):
-    value: tf.Tensor
-    reward: tf.Tensor
-    policy_logits: Dict[Action, tf.Tensor]
-    hidden_state: List[tf.Tensor]
+    value: float
+    reward: float
+    policy_logits: Dict[Action, float]
+    hidden_state: List[float]

@@ -538,3 +538,4 @@ ipython_config.py
 /.idea/vcs.xml
 /lab.ipynb
 .idea
+/summary/

@@ -50,7 +50,7 @@ def select_action(node: Node, network: Network, config: MuZeroConfig):
     visit_counts = [
         (child.visit_count, action) for action, child in node.children.items()
     ]
-    t = visit_softmax_temperature(trained_steps=network.training_steps_counter(), config=config)
+    t = visit_softmax_temperature(trained_steps=network.training_steps(), config=config)
     action = softmax_sample(visit_counts, t)
     return action
 

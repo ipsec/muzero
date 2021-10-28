@@ -1,21 +1,23 @@
 from abc import ABC
-from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 
 import numpy as np
 import tensorflow as tf
+from sklearn import preprocessing
 from tensorflow.keras.layers import Dense
 from tensorflow.keras.models import Model
-from tensorflow.keras.models import load_model
 
 from config import MuZeroConfig
 from games.game import Action
 from models import NetworkOutput
-from utils import tf_support_to_scalar
 
 
-def scale_hidden_state(t: tf.Tensor):
-    return (t - tf.reduce_min(t)) / (tf.reduce_max(t) - tf.reduce_min(t))
+def scale_gradient(tensor: tf.Tensor, scale: float) -> tf.Tensor:
+    """
+    Scale gradients for reverse differentiation proportional to the given scale.
+    Does not influence the magnitude/ scale of the output from a given tensor (just the gradient).
+    """
+    return tensor * scale + tf.stop_gradient(tensor) * (1 - scale)
 
 
 def build_policy_logits(policy_logits: tf.Tensor):
@@ -33,10 +35,10 @@ class Prediction(Model, ABC):
         self.inputs = Dense(hidden_state_size, name="f_inputs")
         self.hidden_policy = Dense(neurons, name="f_hidden_policy", activation=tf.nn.relu)
         self.hidden_value = Dense(neurons, name="f_hidden_value", activation=tf.nn.relu)
-        self.policy = Dense(action_state_size, name="f_policy")
-        self.value = Dense(2 * support_size + 1, name="f_value")
+        self.policy = Dense(action_state_size, name="f_policy", activation=tf.nn.softmax)
+        # self.value = Dense(support_size * 2 + 1, name="f_value", activation=tf.nn.softmax)
+        self.value = Dense(1, name="f_value", activation=tf.nn.relu)
 
-    @tf.function
     def call(self, hidden_state, **kwargs) -> Tuple[tf.Tensor, tf.Tensor]:
         """
         :param hidden_state
@@ -63,10 +65,10 @@ class Dynamics(Model, ABC):
         self.inputs = Dense(enc_space_size, name="g_inputs")
         self.hidden_state = Dense(neurons, name="g_hidden_state", activation=tf.nn.relu)
         self.hidden_reward = Dense(neurons, name="g_hidden_reward", activation=tf.nn.relu)
-        self.s_k = Dense(hidden_state_size, name="g_s_k", activation=tf.nn.relu)
-        self.r_k = Dense(2 * support_size + 1, name="g_r_k")
+        self.s_k = Dense(hidden_state_size, name="g_s_k", activation=tf.nn.tanh)
+        # self.r_k = Dense(support_size * 2 + 1, name="g_r_k", activation=tf.nn.softmax)
+        self.r_k = Dense(1, name="g_r_k", activation=tf.nn.relu)
 
-    @tf.function
     def call(self, encoded_space, **kwargs) -> Tuple[tf.Tensor, tf.Tensor]:
         """
         :param **kwargs:
@@ -93,9 +95,8 @@ class Representation(Model, ABC):
         neurons = 512
         self.inputs = Dense(obs_space_size, name="h_inputs")
         self.hidden = Dense(neurons, name="h_hidden", activation=tf.nn.relu)
-        self.s_0 = Dense(hidden_state_size, name="h_s_0", activation=tf.nn.relu)
+        self.s_0 = Dense(hidden_state_size, name="h_s_0", activation=tf.nn.tanh)
 
-    @tf.function
     def call(self, observation, **kwargs) -> tf.Tensor:
         """
         :param observation
@@ -110,6 +111,7 @@ class Representation(Model, ABC):
 class Network(object):
     def __init__(self, config: MuZeroConfig):
         self.config = config
+        self.min_max_scaler = preprocessing.MinMaxScaler()
         self._training_steps = 0
 
         self.hidden_state_size = 50
@@ -120,112 +122,137 @@ class Network(object):
         self.g_dynamics = Dynamics(self.hidden_state_size, encoded_size, self.config.support_size)
         self.h_representation = Representation(config.state_space_size, self.hidden_state_size)
 
-        self.f_prediction_path = Path('./checkpoints/muzero')
-        self.g_dynamics_path = Path('./checkpoints/muzero')
-        self.h_representation_path = Path('./checkpoints/muzero')
+        # TODO: como inicializar os pesos?
+        self.f_prediction(np.atleast_2d(np.random.random(self.hidden_state_size)))
+        self.g_dynamics(np.atleast_2d(np.random.random(encoded_size)))
+        self.h_representation(np.atleast_2d(np.random.random(config.state_space_size)))
 
-    def save(self, step: int):
-        # Saving step folder
-        prediction_step_path = self.f_prediction_path.joinpath(str(step)).joinpath("Prediction")
-        dynamics_step_path = self.g_dynamics_path.joinpath(str(step)).joinpath("Dynamics")
-        representation_step_path = self.h_representation_path.joinpath(str(step)).joinpath("Representation")
-        Path.mkdir(prediction_step_path, parents=True, exist_ok=True)
-        Path.mkdir(dynamics_step_path, parents=True, exist_ok=True)
-        Path.mkdir(representation_step_path, parents=True, exist_ok=True)
-        try:
-            self.f_prediction.save(prediction_step_path, include_optimizer=False)
-            self.g_dynamics.save(dynamics_step_path, include_optimizer=False)
-            self.h_representation.save(representation_step_path, include_optimizer=False)
-        except Exception:
-            pass
+    def scale(self, v: np.ndarray):
+        return self.min_max_scaler.fit_transform(v)
 
-    def save_latest(self):
-        # Saving latest folder
-        prediction_latest_path = self.f_prediction_path.joinpath('latest').joinpath("Prediction")
-        dynamics_latest_path = self.g_dynamics_path.joinpath('latest').joinpath("Dynamics")
-        representation_latest_path = self.h_representation_path.joinpath('latest').joinpath("Representation")
-        Path.mkdir(prediction_latest_path, parents=True, exist_ok=True)
-        Path.mkdir(dynamics_latest_path, parents=True, exist_ok=True)
-        Path.mkdir(representation_latest_path, parents=True, exist_ok=True)
-        try:
-            self.f_prediction.save(prediction_latest_path, include_optimizer=False)
-            self.g_dynamics.save(dynamics_latest_path, include_optimizer=False)
-            self.h_representation.save(representation_latest_path, include_optimizer=False)
-        except Exception:
-            pass
-
-    def restore(self):
-        prediction_latest_path = self.f_prediction_path.joinpath('latest').joinpath("Prediction")
-        dynamics_latest_path = self.g_dynamics_path.joinpath('latest').joinpath("Dynamics")
-        representation_latest_path = self.h_representation_path.joinpath('latest').joinpath("Representation")
-
-        if prediction_latest_path.exists() and dynamics_latest_path.exists() and representation_latest_path.exists():
-            try:
-                self.f_prediction = load_model(prediction_latest_path, compile=False)
-                self.g_dynamics = load_model(dynamics_latest_path, compile=False)
-                self.h_representation = load_model(representation_latest_path, compile=False)
-            except Exception:
-                pass
-
-    def initial_inference(self, observation: np.array, training: bool = False) -> NetworkOutput:
+    def initial_inference(self, observations: np.array) -> NetworkOutput:
         # representation + prediction function
 
         # representation
         # observation = tf.expand_dims(observation, axis=0)
         # observation = scale_observation(observation)
-        s_0 = self.h_representation(observation, training=training)
-
-        s_0 = scale_hidden_state(s_0)
+        observations = observations[np.newaxis, ...]
+        s_0 = self.h_representation(observations)
+        # s_0 = self.scale(s_0)
 
         # prediction
-        policy, value = self.f_prediction(s_0, training=training)
-        value = tf_support_to_scalar(value, self.config.support_size)
+        policy, value = self.f_prediction(s_0)
+        # value = tf_support_to_scalar(value, self.config.support_size)
 
         return NetworkOutput(
-            value=tf.squeeze(value),
-            reward=tf.constant(0.0),
+            value=value,
+            reward=0.,
             policy_logits=build_policy_logits(policy),
             hidden_state=s_0
         )
 
-    def recurrent_inference(self, hidden_state: tf.Tensor, action: Action, training: bool = False) -> NetworkOutput:
+    def recurrent_inference(self, hidden_state: tf.Tensor, action: Action) -> NetworkOutput:
         # dynamics + prediction function
         # dynamics (encoded_state)
         one_hot = tf.one_hot([action.index], self.config.action_space_size)
         encoded_state = tf.concat([hidden_state, one_hot], axis=1)
 
-        s_k, r_k = self.g_dynamics(encoded_state, training=training)
+        s_k, r_k = self.g_dynamics(encoded_state)
 
-        s_k = scale_hidden_state(s_k)
+        # s_k = self.scale(s_k)
 
-        policy, value = self.f_prediction(s_k, training=training)
-        value = tf_support_to_scalar(value, self.config.support_size)
-        r_k = tf_support_to_scalar(r_k, self.config.support_size)
+        policy, value = self.f_prediction(s_k)
+        # value = tf_support_to_scalar(value, self.config.support_size)
+        # r_k = tf_support_to_scalar(r_k, self.config.support_size)
 
         return NetworkOutput(
-            value=tf.squeeze(value),
-            reward=tf.squeeze(r_k),
+            value=value,
+            reward=r_k,
             policy_logits=build_policy_logits(policy),
             hidden_state=s_k
         )
 
-    def get_weights(self) -> List:
-        networks = self.get_networks()
-        return [variable for network in networks for variable in network.trainable_weights]
+    def set_weights(self, weights: Dict):
+        self.f_prediction.set_weights(weights.get('prediction'))
+        self.g_dynamics.set_weights(weights.get('dynamics'))
+        self.h_representation.set_weights(weights.get('representation'))
+
+    def get_weights(self) -> Dict:
+        return {
+            'prediction': self.f_prediction.get_weights(),
+            'dynamics': self.g_dynamics.get_weights(),
+            'representation': self.h_representation.get_weights()
+        }
 
     def get_variables(self):
-        networks = self.get_networks()
-        return [variable for network in networks for variable in network.trainable_variables]
-
-    def get_networks(self) -> List:
-        return [self.f_prediction, self.g_dynamics, self.h_representation]
+        networks = [self.g_dynamics, self.f_prediction, self.h_representation]
+        return [variables
+                for variables_list in map(lambda n: n.weights, networks)
+                for variables in variables_list]
 
     def training_steps(self) -> int:
-        # How many steps / batches the network has been trained for.
-        return int(self._training_steps / self.config.batch_size)
-
-    def training_steps_counter(self) -> int:
         return self._training_steps
 
-    def increment_training_steps(self):
-        self._training_steps += 1
+    def unroll(self, observations: tf.Tensor, actions: tf.Tensor) -> \
+            List[Tuple[tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor]]:
+
+        # Initial step, from the real observation.
+        network_output = self.initial_inference(observations)
+        hidden_state = network_output.hidden_state
+        predictions = [(1.0, network_output.hidden_state, network_output.value, 0, network_output.policy_logits)]
+
+        # Recurrent steps, from action and previous hidden state.
+        for action in actions:
+            network_output = self.recurrent_inference(hidden_state, action)
+            hidden_state = network_output.hidden_state
+            predictions.append((1.0 / len(actions), network_output.hidden_state, network_output.value,
+                                network_output.reward, network_output.policy_logits))
+            hidden_state = scale_gradient(hidden_state, 0.5)
+
+        return predictions
+
+    def loss_function(self, batch) -> tf.Tensor:
+        loss = 0.
+        for image, actions, targets in batch:
+            # Initial step, from the real observation.
+            network_output = self.initial_inference(image)
+            hidden_state = network_output.hidden_state
+            predictions = [(1.0, network_output)]
+
+            # Recurrent steps, from action and previous hidden state.
+            for action in actions:
+                network_output = self.recurrent_inference(hidden_state, action)
+                hidden_state = network_output.hidden_state
+                predictions.append((1.0 / len(actions), network_output))
+
+                hidden_state = scale_gradient(hidden_state, 0.5)
+
+            for k, (prediction, target) in enumerate(zip(predictions, targets)):
+                gradient_scale, network_output = prediction
+                target_value, target_reward, target_policy = target
+
+                policy = list(network_output.policy_logits.values())
+
+                if not target_policy:
+                    continue
+
+                l = tf.nn.softmax_cross_entropy_with_logits(logits=policy, labels=target_policy)
+                l += scalar_loss(network_output.value, target_value, self.config.support_size)
+
+                if k > 0:
+                    l += scalar_loss(network_output.reward, target_reward, self.config.support_size)
+
+                loss += scale_gradient(l, gradient_scale)
+        loss /= len(batch)
+
+        return loss
+
+    def update_training_steps(self, step: int = None):
+        if step:
+            self._training_steps = step
+        else:
+            self._training_steps += 1
+
+
+def scalar_loss(pred: float, target: float, support_size: int) -> tf.Tensor:
+    return tf.losses.MSE(target, pred)

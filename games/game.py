@@ -67,8 +67,10 @@ class Environment:
 
     def step(self, action: int):
         observation, reward, done, info = self.env.step(action)
-        observation = np.expand_dims(observation, axis=0)
         return observation, reward, done, info
+
+    def render(self):
+        self.env.render()
 
     def close(self):
         self.env.close()
@@ -109,6 +111,9 @@ class Game(object):
         self.rewards.append(reward)
         self.history.append(action)
 
+    def get_reward_total(self):
+        return np.sum(self.rewards)
+
     def store_search_statistics(self, root: Node):
         sum_visits = sum(child.visit_count for child in root.children.values())
         action_space = (Action(index) for index in range(self.action_space_size))
@@ -120,8 +125,10 @@ class Game(object):
 
     def reset(self):
         observation = self.env.reset()
-        observation = np.expand_dims(observation, axis=0)
         return observation
+
+    def render(self):
+        self.env.render()
 
     def get_observation_from_index(self, state_index: int):
         return self.observations[state_index]
@@ -144,7 +151,7 @@ class Game(object):
             if current_index > 0 and current_index <= len(self.rewards):
                 last_reward = self.rewards[current_index - 1]
             else:
-                last_reward = None
+                last_reward = 0.
 
             if current_index < len(self.root_values):
                 targets.append((value, last_reward, self.child_visits[current_index]))
@@ -163,37 +170,6 @@ class Game(object):
         self.env.close()
 
 
-class ReplayBuffer(object):
-
-    def __init__(self, config: MuZeroConfig):
-        self.window_size = config.window_size
-        self.batch_size = config.batch_size
-        self.buffer = deque(maxlen=self.window_size)
-        self.buffer_tmp = deque()
-
-    def save_game(self, game):
-        self.buffer_tmp.append(game)
-
-    def update(self):
-        self.buffer += self.buffer_tmp
-        self.buffer_tmp.clear()
-
-    def sample_batch(self, num_unroll_steps: int, td_steps: int):
-        games = [self.sample_game() for _ in range(self.batch_size)]
-        game_pos = [(g, self.sample_position(g)) for g in games]
-        return [(g.get_observation_from_index(i), g.history[i:i + num_unroll_steps],
-                 g.make_target(i, num_unroll_steps, td_steps, g.to_play()))
-                for (g, i) in game_pos]
-
-    def sample_game(self) -> Game:
-        return np.random.choice(self.buffer)
-        # return choice(self.buffer)
-
-    def sample_position(self, game) -> int:
-        return np.random.choice(len(game.history))
-        # return randrange(len(game.history))
-
-
 def make_atari_config(env: Env) -> MuZeroConfig:
     return MuZeroConfig(
         env=env,
@@ -202,10 +178,10 @@ def make_atari_config(env: Env) -> MuZeroConfig:
         max_moves=500,  # Half an hour at action repeat 4.
         discount=0.997,
         dirichlet_alpha=0.25,
-        num_simulations=50,  # Number of future moves self-simulated
-        batch_size=16,
-        td_steps=50,  # Number of steps in the future to take into account for calculating the target value
-        num_actors=3,
+        num_simulations=15,  # Number of future moves self-simulated
+        batch_size=64,
+        td_steps=10,  # Number of steps in the future to take into account for calculating the target value
+        num_actors=4,
         training_steps=10000,
         checkpoint_interval=10,
         lr_init=1e-4,
