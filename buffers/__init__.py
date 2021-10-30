@@ -27,11 +27,9 @@ class ReplayBuffer(object):
 
     def sample_game(self) -> Game:
         return np.random.choice(self.buffer)
-        # return choice(self.buffer)
 
     def sample_position(self, game) -> int:
         return np.random.choice(len(game.history))
-        # return randrange(len(game.history))
 
     def size(self):
         return len(self.buffer)

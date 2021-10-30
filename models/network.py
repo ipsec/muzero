@@ -1,15 +1,16 @@
 from abc import ABC
-from typing import List, Tuple, Dict
+from pathlib import Path
+from typing import Tuple, Dict, List
 
 import numpy as np
 import tensorflow as tf
-from sklearn import preprocessing
 from tensorflow.keras.layers import Dense
 from tensorflow.keras.models import Model
 
 from config import MuZeroConfig
 from games.game import Action
 from models import NetworkOutput
+from utils import tf_support_to_scalar, tf_scalar_to_support, cast_to_tensor
 
 
 def scale_gradient(tensor: tf.Tensor, scale: float) -> tf.Tensor:
@@ -35,10 +36,10 @@ class Prediction(Model, ABC):
         self.inputs = Dense(hidden_state_size, name="f_inputs")
         self.hidden_policy = Dense(neurons, name="f_hidden_policy", activation=tf.nn.relu)
         self.hidden_value = Dense(neurons, name="f_hidden_value", activation=tf.nn.relu)
-        self.policy = Dense(action_state_size, name="f_policy", activation=tf.nn.softmax)
-        # self.value = Dense(support_size * 2 + 1, name="f_value", activation=tf.nn.softmax)
-        self.value = Dense(1, name="f_value", activation=tf.nn.relu)
+        self.policy = Dense(action_state_size, name="f_policy")
+        self.value = Dense(support_size * 2 + 1, name="f_value", activation=tf.nn.relu)
 
+    @tf.function
     def call(self, hidden_state, **kwargs) -> Tuple[tf.Tensor, tf.Tensor]:
         """
         :param hidden_state
@@ -66,9 +67,9 @@ class Dynamics(Model, ABC):
         self.hidden_state = Dense(neurons, name="g_hidden_state", activation=tf.nn.relu)
         self.hidden_reward = Dense(neurons, name="g_hidden_reward", activation=tf.nn.relu)
         self.s_k = Dense(hidden_state_size, name="g_s_k", activation=tf.nn.tanh)
-        # self.r_k = Dense(support_size * 2 + 1, name="g_r_k", activation=tf.nn.softmax)
-        self.r_k = Dense(1, name="g_r_k", activation=tf.nn.relu)
+        self.r_k = Dense(support_size * 2 + 1, name="g_r_k", activation=tf.nn.relu)
 
+    @tf.function
     def call(self, encoded_space, **kwargs) -> Tuple[tf.Tensor, tf.Tensor]:
         """
         :param **kwargs:
@@ -97,6 +98,7 @@ class Representation(Model, ABC):
         self.hidden = Dense(neurons, name="h_hidden", activation=tf.nn.relu)
         self.s_0 = Dense(hidden_state_size, name="h_s_0", activation=tf.nn.tanh)
 
+    @tf.function
     def call(self, observation, **kwargs) -> tf.Tensor:
         """
         :param observation
@@ -111,7 +113,6 @@ class Representation(Model, ABC):
 class Network(object):
     def __init__(self, config: MuZeroConfig):
         self.config = config
-        self.min_max_scaler = preprocessing.MinMaxScaler()
         self._training_steps = 0
 
         self.hidden_state_size = 50
@@ -122,27 +123,21 @@ class Network(object):
         self.g_dynamics = Dynamics(self.hidden_state_size, encoded_size, self.config.support_size)
         self.h_representation = Representation(config.state_space_size, self.hidden_state_size)
 
-        # TODO: como inicializar os pesos?
+        # TODO: how initialize the weights the right way?
         self.f_prediction(np.atleast_2d(np.random.random(self.hidden_state_size)))
         self.g_dynamics(np.atleast_2d(np.random.random(encoded_size)))
         self.h_representation(np.atleast_2d(np.random.random(config.state_space_size)))
-
-    def scale(self, v: np.ndarray):
-        return self.min_max_scaler.fit_transform(v)
 
     def initial_inference(self, observations: np.array) -> NetworkOutput:
         # representation + prediction function
 
         # representation
-        # observation = tf.expand_dims(observation, axis=0)
-        # observation = scale_observation(observation)
         observations = observations[np.newaxis, ...]
         s_0 = self.h_representation(observations)
-        # s_0 = self.scale(s_0)
 
         # prediction
         policy, value = self.f_prediction(s_0)
-        # value = tf_support_to_scalar(value, self.config.support_size)
+        value = tf_support_to_scalar(value, self.config.support_size)
 
         return NetworkOutput(
             value=value,
@@ -159,11 +154,9 @@ class Network(object):
 
         s_k, r_k = self.g_dynamics(encoded_state)
 
-        # s_k = self.scale(s_k)
-
         policy, value = self.f_prediction(s_k)
-        # value = tf_support_to_scalar(value, self.config.support_size)
-        # r_k = tf_support_to_scalar(r_k, self.config.support_size)
+        value = tf_support_to_scalar(value, self.config.support_size)
+        r_k = tf_support_to_scalar(r_k, self.config.support_size)
 
         return NetworkOutput(
             value=value,
@@ -184,6 +177,9 @@ class Network(object):
             'representation': self.h_representation.get_weights()
         }
 
+    def get_networks(self) -> List:
+        return [self.f_prediction, self.g_dynamics, self.h_representation]
+
     def get_variables(self):
         networks = [self.g_dynamics, self.f_prediction, self.h_representation]
         return [variables
@@ -192,24 +188,6 @@ class Network(object):
 
     def training_steps(self) -> int:
         return self._training_steps
-
-    def unroll(self, observations: tf.Tensor, actions: tf.Tensor) -> \
-            List[Tuple[tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor]]:
-
-        # Initial step, from the real observation.
-        network_output = self.initial_inference(observations)
-        hidden_state = network_output.hidden_state
-        predictions = [(1.0, network_output.hidden_state, network_output.value, 0, network_output.policy_logits)]
-
-        # Recurrent steps, from action and previous hidden state.
-        for action in actions:
-            network_output = self.recurrent_inference(hidden_state, action)
-            hidden_state = network_output.hidden_state
-            predictions.append((1.0 / len(actions), network_output.hidden_state, network_output.value,
-                                network_output.reward, network_output.policy_logits))
-            hidden_state = scale_gradient(hidden_state, 0.5)
-
-        return predictions
 
     def loss_function(self, batch) -> tf.Tensor:
         loss = 0.
@@ -245,14 +223,24 @@ class Network(object):
                 loss += scale_gradient(l, gradient_scale)
         loss /= len(batch)
 
+        for weights in self.get_variables():
+            loss += self.config.weight_decay * tf.nn.l2_loss(weights)
+
         return loss
 
-    def update_training_steps(self, step: int = None):
-        if step:
-            self._training_steps = step
-        else:
-            self._training_steps += 1
+    def update_training_steps(self):
+        self._training_steps += 1
+
+    def save(self):
+        for model in self.get_networks():
+            path = Path(f'./data/saved_model/{self.training_steps()}/{model.__class__.__name__}')
+            Path.mkdir(path, parents=True, exist_ok=True)
+            tf.saved_model.save(model, str(path.absolute()))
 
 
 def scalar_loss(pred: float, target: float, support_size: int) -> tf.Tensor:
-    return tf.losses.MSE(target, pred)
+    pred = tf.expand_dims([cast_to_tensor(pred)], -1)
+    target = tf.expand_dims([cast_to_tensor(target)], -1)
+    pred = tf_scalar_to_support(pred, support_size)
+    target = tf_scalar_to_support(target, support_size)
+    return tf.reduce_sum(-target * tf.nn.log_softmax(pred, axis=1))

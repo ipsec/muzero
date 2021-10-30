@@ -1,4 +1,3 @@
-from collections import deque
 from typing import List
 
 import gym
@@ -111,9 +110,6 @@ class Game(object):
         self.rewards.append(reward)
         self.history.append(action)
 
-    def get_reward_total(self):
-        return np.sum(self.rewards)
-
     def store_search_statistics(self, root: Node):
         sum_visits = sum(child.visit_count for child in root.children.values())
         action_space = (Action(index) for index in range(self.action_space_size))
@@ -168,22 +164,3 @@ class Game(object):
 
     def close(self):
         self.env.close()
-
-
-def make_atari_config(env: Env) -> MuZeroConfig:
-    return MuZeroConfig(
-        env=env,
-        state_space_size=int(np.prod(env.observation_space.shape)),
-        action_space_size=env.action_space.n,
-        max_moves=500,  # Half an hour at action repeat 4.
-        discount=0.997,
-        dirichlet_alpha=0.25,
-        num_simulations=15,  # Number of future moves self-simulated
-        batch_size=64,
-        td_steps=10,  # Number of steps in the future to take into account for calculating the target value
-        num_actors=4,
-        training_steps=10000,
-        checkpoint_interval=10,
-        lr_init=1e-4,
-        lr_decay_steps=1000,
-        lr_decay_rate=0.9)
