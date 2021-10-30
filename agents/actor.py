@@ -30,6 +30,7 @@ class Actor:
         self.metrics_games = Sum(self.name, dtype=tf.int32)
         self.metrics_temperature = Sum(self.name, dtype=tf.float32)
         self.metrics_rewards = Mean(self.name, dtype=tf.float32)
+        self.started = False
 
     def update_metrics(self):
         with self.summary.as_default():
@@ -49,9 +50,14 @@ class Actor:
             self.update_metrics()
 
             self.replay_buffer.save_game.remote(game)
-            if ray.get(self.storage.started.remote()):
-                weights = ray.get(self.storage.get_network_weights.remote())
-                self.network.set_weights(weights)
+
+            if not self.started:
+                self.started = ray.get(self.storage.started.remote())
+                continue
+
+            weights = ray.get(self.storage.get_network_weights.remote())
+            self.network.set_weights(weights)
+
         print(f"Actor: {self.name } finished.")
 
     def play_game(self) -> Game:
