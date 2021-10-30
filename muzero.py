@@ -46,7 +46,7 @@ def make_config(environment: Env) -> MuZeroConfig:
         td_steps=10,  # Number of steps in the future to take into account for calculating the target value
         num_actors=4,
         training_steps=int(1e8),  # Max number of training steps
-        checkpoint_interval=10,
+        checkpoint_interval=100,
         save_interval=10000,
         lr_init=1e-4,
         lr_decay_steps=1000,

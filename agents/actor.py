@@ -55,8 +55,9 @@ class Actor:
                 self.started = ray.get(self.storage.started.remote())
                 continue
 
-            weights = ray.get(self.storage.get_network_weights.remote())
-            self.network.set_weights(weights)
+            if self.games_played % self.config.checkpoint_interval == 0:
+                weights = ray.get(self.storage.get_network_weights.remote())
+                self.network.set_weights(weights)
 
         print(f"Actor: {self.name } finished.")
 
