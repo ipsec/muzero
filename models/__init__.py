@@ -1,3 +1,4 @@
+import tensorflow as tf
 from typing import Dict, List, NamedTuple
 
 from games.game import Action

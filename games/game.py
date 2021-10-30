@@ -1,5 +1,3 @@
-from collections import deque
-from random import randrange, choice
 from typing import List
 
 import gym
@@ -11,7 +9,11 @@ from utils import Node
 
 
 class Player(object):
-    pass
+    def __init__(self):
+        self.player = 'Player 0'
+
+    def __eq__(self, other):
+        return True
 
 
 class Action(object):
@@ -55,22 +57,25 @@ class ActionHistory(object):
         return Player()
 
 
-class Environment(object):
-    """The environment MuZero is interacting with."""
+class Environment:
+
     def __init__(self):
         # self.env = gym.make('LunarLander-v2')
         self.env = gym.make('CartPole-v1')
         self.action_space_size = self.env.action_space.n
 
-    def reset(self):
-        return self.env.reset()
-
-    def step(self, action):
+    def step(self, action: int):
         observation, reward, done, info = self.env.step(action)
         return observation, reward, done, info
 
+    def render(self):
+        self.env.render()
+
     def close(self):
         self.env.close()
+
+    def reset(self):
+        return self.env.reset()
 
 
 class Game(object):
@@ -78,31 +83,30 @@ class Game(object):
 
     def __init__(self, discount: float):
         self.env = Environment()
-        self.states = [self.env.reset()]
+        self.observations = [self.reset()]
         self.history = []
         self.rewards = []
         self.child_visits = []
         self.root_values = []
         self.action_space_size = self.env.action_space_size
         self.discount = discount
-        self.actions = list(map(lambda i: Action(i), range(self.action_space_size)))
         self.done = False
+        self.actions = list(map(lambda i: Action(i), range(self.action_space_size)))
 
     def terminal(self) -> bool:
-        # Game specific termination rules.
-        if self.done:
-            self.env.close()
-
         return self.done
 
     def legal_actions(self) -> List[Action]:
-        # Game specific calculation of legal actions.
         return self.actions
 
     def apply(self, action: Action):
         observation, reward, done, info = self.env.step(action.index)
         self.done = done
-        self.states.append(observation)
+
+        if self.done:
+            self.close()
+
+        self.observations.append(observation)
         self.rewards.append(reward)
         self.history.append(action)
 
@@ -115,9 +119,15 @@ class Game(object):
         ])
         self.root_values.append(root.value())
 
-    def make_image(self, state_index: int):
-        # Game specific feature planes.
-        return self.states[state_index]
+    def reset(self):
+        observation = self.env.reset()
+        return observation
+
+    def render(self):
+        self.env.render()
+
+    def get_observation_from_index(self, state_index: int):
+        return self.observations[state_index]
 
     def make_target(self, state_index: int, num_unroll_steps: int, td_steps: int,
                     to_play: Player):
@@ -134,10 +144,10 @@ class Game(object):
             for i, reward in enumerate(self.rewards[current_index:bootstrap_index]):
                 value += reward * self.discount ** i  # pytype: disable=unsupported-operands
 
-            if 0 < current_index <= len(self.rewards):
+            if current_index > 0 and current_index <= len(self.rewards):
                 last_reward = self.rewards[current_index - 1]
             else:
-                last_reward = None
+                last_reward = 0.
 
             if current_index < len(self.root_values):
                 targets.append((value, last_reward, self.child_visits[current_index]))
@@ -152,57 +162,5 @@ class Game(object):
     def action_history(self) -> ActionHistory:
         return ActionHistory(self.history, self.action_space_size)
 
-
-class ReplayBuffer(object):
-
-    def __init__(self, config: MuZeroConfig):
-        self.window_size = config.window_size
-        self.batch_size = config.batch_size
-        self.buffer = deque(maxlen=self.window_size)
-        self.buffer_tmp = deque(maxlen=self.window_size)
-
-    def update_main(self):
-        """
-        Update self.buffer with recent played games
-        :return: None
-        """
-        self.buffer += self.buffer_tmp
-        self.buffer_tmp.clear()
-
-    def save_game(self, game):
-        self.buffer_tmp.append(game)
-
-    def sample_batch(self, num_unroll_steps: int, td_steps: int):
-        games = [self.sample_game() for _ in range(self.batch_size)]
-        game_pos = [(g, self.sample_position(g)) for g in games]
-        return [(g.make_image(i), g.history[i:i + num_unroll_steps],
-                 g.make_target(i, num_unroll_steps, td_steps, g.to_play()))
-                for (g, i) in game_pos]
-
-    def sample_game(self) -> Game:
-        return np.random.choice(self.buffer)
-        #return choice(self.buffer)
-
-    def sample_position(self, game) -> int:
-        return np.random.choice(len(game.history))
-        #return randrange(len(game.history))
-
-
-def make_atari_config(env: Env) -> MuZeroConfig:
-
-    return MuZeroConfig(
-        env=env,
-        state_space_size=int(np.prod(env.observation_space.shape)),
-        action_space_size=env.action_space.n,
-        max_moves=700,  # Half an hour at action repeat 4.
-        discount=0.997,
-        dirichlet_alpha=0.25,
-        num_simulations=15,  # Number of future moves self-simulated
-        batch_size=32,
-        td_steps=10,  # Number of steps in the future to take into account for calculating the target value
-        num_actors=10,
-        training_steps=10000,
-        checkpoint_interval=100,
-        lr_init=0.02,
-        lr_decay_steps=1000,
-        lr_decay_rate=0.9)
+    def close(self):
+        self.env.close()

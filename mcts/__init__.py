@@ -1,6 +1,6 @@
+import math
 from typing import List
 
-import math
 import numpy as np
 
 from config import MuZeroConfig
@@ -37,21 +37,12 @@ def run_mcts(config: MuZeroConfig, root: Node, action_history: ActionHistory,
                       config.discount, min_max_stats)
 
 
-def visit_softmax_temperature(training_steps):
-    if training_steps < 5000:
-        return 1.0
-    elif training_steps < 7500:
-        return 0.5
-    else:
-        return 0.15
-
-
-def select_action(node: Node, network: Network):
+def select_action(node: Node, temperature: float = 1.0):
     visit_counts = [
         (child.visit_count, action) for action, child in node.children.items()
     ]
-    t = visit_softmax_temperature(training_steps=network.training_steps())
-    action = softmax_sample(visit_counts, t)
+
+    action = softmax_sample(visit_counts, temperature)
     return action
 
 
